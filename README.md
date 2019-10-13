@@ -1,4 +1,4 @@
-# Stock_By_Attributes_Combined
+# Stock By Attributes Combined
 ========================
 
 ## Stock by Attributes (SBA) for Zen Cart 1.5.6
