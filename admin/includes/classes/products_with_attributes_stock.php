@@ -166,45 +166,47 @@ class products_with_attributes_stock extends base
     // returns an array of product ids which contain attributes
     function get_products_with_attributes() {
       global $db;
-      if (isset($_SESSION['languages_id'])){ $language_id = (int)$_SESSION['languages_id'];} else { $language_id=1;}
+      if (!empty($_SESSION['languages_id'])) {
+        $language_id = (int)$_SESSION['languages_id'];
+      } else {
+        $language_id=1;
+      }
       $query = 'SELECT DISTINCT pa.products_id, d.products_name, p.products_quantity, p.products_model, p.products_image
-                FROM '.TABLE_PRODUCTS_ATTRIBUTES.' pa
-                left join '.TABLE_PRODUCTS_DESCRIPTION.' d on (pa.products_id = d.products_id)
-                left join '.TABLE_PRODUCTS.' p on (pa.products_id = p.products_id)
-                WHERE d.language_id='.$language_id.' 
-                ORDER BY d.products_name ';
+                FROM ' . TABLE_PRODUCTS_ATTRIBUTES . ' pa
+                left join ' . TABLE_PRODUCTS_DESCRIPTION . ' d on (pa.products_id = d.products_id)
+                left join ' . TABLE_PRODUCTS . ' p on (pa.products_id = p.products_id)
+                WHERE d.language_id = ' . (int)$language_id . ' 
+                ORDER BY d.products_name';
       $products = $db->Execute($query);
       while(!$products->EOF){
-        $products_array[] = $products->fields['products_id'];
+        $products_array[] = (int)$products->fields['products_id'];
         $products->MoveNext();
       }
       return $products_array;
     }
   
   
-    function get_attributes_name($attribute_id, $languageId=1)
-    {
+    function get_attributes_name($attribute_id, $languageId = 1) {
       global $db;
 
-      $query = 'select pa.products_attributes_id, po.products_options_name, pov.products_options_values_name
-             from '.TABLE_PRODUCTS_ATTRIBUTES.' pa
-             left join '.TABLE_PRODUCTS_OPTIONS.' po on (pa.options_id = po.products_options_id)
-             left join '.TABLE_PRODUCTS_OPTIONS_VALUES.' pov on (pa.options_values_id = pov.products_options_values_id)
-             where pa.products_attributes_id = "'.$attribute_id.'"
-              AND po.language_id = "'.$languageId.'"
-              and po.language_id = pov.language_id';
+      $query = 'SELECT pa.products_attributes_id, po.products_options_name, pov.products_options_values_name
+             FROM ' . TABLE_PRODUCTS_ATTRIBUTES . ' pa
+             LEFT JOIN ' . TABLE_PRODUCTS_OPTIONS . ' po ON (pa.options_id = po.products_options_id)
+             LEFT JOIN ' . TABLE_PRODUCTS_OPTIONS_VALUES . ' pov ON (pa.options_values_id = pov.products_options_values_id)
+             WHERE pa.products_attributes_id = ' . (int)$attribute_id . '
+              AND po.language_id = ' . (int)$languageId . '
+              AND po.language_id = pov.language_id';
               
       $attributes = $db->Execute($query);
-      if (!$attributes->EOF)
-      {    
-        $attributes_output = array('option' => $attributes->fields['products_options_name'],
-                       'value' => $attributes->fields['products_options_values_name']);
-        return $attributes_output;
+
+      $attributes_output = false;
+      if (!$attributes->EOF) {    
+        $attributes_output = array(
+                                   'option' => $attributes->fields['products_options_name'],
+                                   'value' => $attributes->fields['products_options_values_name'],
+                                  );
       }
-      else
-      {
-        return false;
-      }
+      return $attributes_output;
     }
         
         
@@ -565,7 +567,33 @@ function updateAttribQty($stock_id = null, $quantity = null){
   
   if (!empty($stock_id) && is_numeric($stock_id) && is_numeric($quantity)){
       $query = 'UPDATE `' . TABLE_PRODUCTS_WITH_ATTRIBUTES_STOCK . '` SET quantity=:quantity: WHERE stock_id=:stock_id: LIMIT 1';
-      $query = $db->bindVars($query, ':quantity:', $quantity, 'float');
+      // Need to account for issue identified with earlier Zen Cart versions use of the 'float' conversion.
+      //  It has been found that in earlier versions (i.e. 1.5.4), if $quantity were non-zero and passed to bindVars that it would return a 0.
+      //  Therefore it does not matter if a zero is passed to this function as it will still process as a 0.
+      if ($quantity == 0 || $db->bindVars(':test:', ':test:', $quantity, 'float') != 0) {
+        $query = $db->bindVars($query, ':quantity:', $quantity, 'float');
+      } else {
+        // Come here if the bindVars of a non-zero value as a float returns a 0 for potential alternate processing to a float.
+        //  Code adapted from Zen Cart 1.5.6 admin/includes/modules/update_product.php
+        $tempval = $quantity;
+        if ($tempval === null) {
+          $quantity = 0;
+        }
+        if ($quantity !== 0) {
+          $tempval = preg_replace('/[^0-9,\.\-]/', '', $quantity);
+          // do a non-strict compare here:
+          if ($tempval == 0) {
+            $quantity = 0;
+          }
+        }
+
+        if ($tempval != 0) {
+          $quantity = (float)$tempval;
+        }
+        unset($tempval);
+        // Go ahead and process as a string.
+        $query = $db->bindVars($query, ':quantity:', $quantity, 'noquotestring');
+      }
       $query = $db->bindVars($query, ':stock_id:', $stock_id, 'integer');
       $result = $db->execute($query);
   }

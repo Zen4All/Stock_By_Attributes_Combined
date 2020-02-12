@@ -55,7 +55,7 @@ if (zen_not_null($action)) {
   if (isset($_POST['categories_update_id'])) $_POST['categories_update_id'] = (int)$_POST['categories_update_id'];
 
 // set categories and products if not set
-  if ($products_filter == '' and $current_category_id != '') {
+  /*if ($action == 'new_cat') {
     $sql =     "select ptc.*
     from " . TABLE_PRODUCTS_TO_CATEGORIES . " ptc
     left join " . TABLE_PRODUCTS_DESCRIPTION . " pd
@@ -65,21 +65,32 @@ if (zen_not_null($action)) {
     order by pd.products_name";
     $new_product_query = $db->Execute($sql);
     $products_filter = $new_product_query->fields['products_id'];
-    if ($products_filter != '') {
-      zen_redirect(zen_href_link(FILENAME_PRODUCTS_WITH_ATTRIBUTES_STOCK, 'products_filter=' . $products_filter . '&current_category_id=' . $current_category_id));
-    }
-  } else {
-    if ($products_filter == '' and $current_category_id == '') {
+    zen_redirect(zen_href_link(FILENAME_PRODUCTS_WITH_ATTRIBUTES_STOCK, 'products_filter=' . $products_filter . '&current_category_id=' . $current_category_id));
+  }*/
+
+  if (!zen_not_null($products_filter)) {
+    if (empty($current_category_id)) {
       $reset_categories_id = zen_get_category_tree('', '', '0', '', '', true);
       $current_category_id = $reset_categories_id[0]['id'];
-      $sql = "select ptc.*
+    }
+
+    $sql =     "select ptc.*
       from " . TABLE_PRODUCTS_TO_CATEGORIES . " ptc
       left join " . TABLE_PRODUCTS_DESCRIPTION . " pd
-      on ptc.products_id = pd.products_id and pd.language_id = '" . (int)$_SESSION['languages_id'] . "'
-      where ptc.categories_id='" . $current_category_id . "'
+      on ptc.products_id = pd.products_id
+      and pd.language_id = " . (int)$_SESSION['languages_id'] . "
+      where ptc.categories_id=" . $current_category_id . "
       order by pd.products_name";
       $new_product_query = $db->Execute($sql);
-      $products_filter = isset($new_product_query->fields['products_id']) ? $new_product_query->fields['products_id'] : 0;
+
+    $products_filter = isset($new_product_query->fields['products_id']) ? $new_product_query->fields['products_id'] : 0;
+
+  // set categories and products if not set
+    if (empty($reset_categories_id)) {
+      if (!empty($products_filter)) {
+        zen_redirect(zen_href_link(FILENAME_PRODUCTS_WITH_ATTRIBUTES_STOCK, 'products_filter=' . $products_filter . '&current_category_id=' . $current_category_id));
+      }
+    } else {
       $_GET['products_filter'] = $products_filter;
     }
   }
@@ -186,7 +197,7 @@ switch ($action) {
     if (isset($_POST['products_id']) && (int) $_POST['products_id'] > 0) {
 
       if (!isset($_POST['quantity']) || !is_numeric($_POST['quantity'])) {
-        $messageStack->add_session("Missing Quantity!", 'failure');
+        $messageStack->add_session(PWA_QUANTITY_MISSING, 'failure');
 // If doesn't exist then need to go back to add, if does exist then need to go to update.
 
         if (isset($_POST['search_order_by']) && zen_not_null($_POST['search_order_by'])) {
@@ -332,14 +343,14 @@ switch ($action) {
     } //s_mack:noconfirm
     //if invalid entry return to product
     if (!isset($products_id) || (int)$products_id === 0) {
-      $messageStack->add_session("Missing or bad products_id!", 'failure');
+      $messageStack->add_session(PWA_PRODUCTS_ID_BAD, 'failure');
       zen_redirect(zen_href_link(FILENAME_PRODUCTS_WITH_ATTRIBUTES_STOCK, 'updateReturnedPID=' . $products_id, $request_type));
     } elseif (!isset($quantity) || !is_numeric($quantity)) {
-      $messageStack->add_session("Missing or bad Quantity!", 'failure');
+      $messageStack->add_session(PWA_QUANTITY_BAD, 'failure');
       zen_redirect(zen_href_link(FILENAME_PRODUCTS_WITH_ATTRIBUTES_STOCK, 'action=add&products_id=' . (int)$products_id, $request_type));
       zen_redirect(zen_href_link(FILENAME_PRODUCTS_WITH_ATTRIBUTES_STOCK, 'updateReturnedPID=' . $products_id, $request_type));
     } elseif (!isset($attributes) || str_replace(',', null, $attributes) == null) {
-      $messageStack->add_session("Missing Attribute Selection!", 'failure');
+      $messageStack->add_session(PWA_ATTRIBUTE_MISSING, 'failure');
       zen_redirect(zen_href_link(FILENAME_PRODUCTS_WITH_ATTRIBUTES_STOCK, 'updateReturnedPID=' . $products_id, $request_type));
     }
 
@@ -353,7 +364,7 @@ switch ($action) {
 
       if (preg_match("/\|/", $attributes) && preg_match("/\;/", $attributes)) {
         $saveResult = null;
-        $messageStack->add_session("Do NOT mix 'All - Attributes' and 'All - Attributes - Combo'", 'failure');
+        $messageStack->add_session(PWA_MIX_ERROR_ALL_COMBO, 'failure');
       } elseif (preg_match("/\|/", $attributes)) {
         // All attributes individually added.
         //explode array on ,
@@ -570,16 +581,16 @@ switch ($action) {
     if (isset($saveResult) && (is_a($saveResult, 'queryFactoryResult') && !count($saveResult->result) && method_exists($db, 'affectedRows') && !$db->affectedRows())) {
       list($matched, $changed, $warnings) = sscanf($saveResult->link->info, "Rows matched: %d Changed: %d Warnings: %d");
       if ($matched > 0) {
-        $messageStack->add_session("No changes made.", 'success');
+        $messageStack->add_session(PWA_NO_CHANGES, 'success');
       }
     }
 
     if (isset($saveResult) && (is_a($saveResult, 'queryFactoryResult') && (count($saveResult->result) || method_exists($db, 'affectedRows') && ($db->affectedRows() || isset($matched) && $matched > 0)) || $saveResult == true)) {
       //Use the button 'Sync Quantities' when needed, or uncomment the line below if you want it done automatically.
       //$stock->update_parent_products_stock($products_id);//keep this line as option, but I think this should not be done automatically.
-      $messageStack->add_session("Product successfully updated", 'success');
+      $messageStack->add_session(PWA_UPDATE_SUCCESS, 'success');
     } else {
-      $messageStack->add_session("Product $products_id update failed: " . print_r($saveResult, true), 'failure');
+      $messageStack->add_session(sprintf(PWA_UPDATE_FAILURE, $products_id, print_r($saveResult, true)), 'failure');
     }
 
     zen_redirect(zen_href_link(FILENAME_PRODUCTS_WITH_ATTRIBUTES_STOCK, 'updateReturnedPID=' . (int)$products_id, $request_type));
@@ -593,10 +604,16 @@ switch ($action) {
         $query = 'delete from ' . TABLE_PRODUCTS_WITH_ATTRIBUTES_STOCK . ' where products_id= :products_id:';
         $query = $db->bindVars($query, ':products_id:', $_POST['products_id'], 'integer');
         $db->Execute($query);
-        $query_result = $db->Execute("SELECT ROW_COUNT() as rows;");
+//        $query_result = $db->Execute("SELECT ROW_COUNT() as rows;"); // MariaDB doesn't like this statement, trying next one.
+        if (method_exists($db, 'affectedRows')) {
+          $quantity_affected = $db->affectedRows();
+        } else {
+          $query_result = $db->Execute("SELECT ROW_COUNT() rows;");
+          $quantity_affected = $query_result->fields['rows'];
+        }
         //Use the button 'Sync Quantities' when needed, or uncomment the line below if you want it done automatically.
         //$stock->update_parent_products_stock((int)$_POST['products_id']);//keep this line as option, but I think this should not be done automatically.
-        $messageStack->add_session(($query_result->fields['rows'] > 1 ? sprintf(PWA_DELETED_VARIANT_ALL, $query_result->fields['rows']) : PWA_DELETED_VARIANT), 'failure');
+        $messageStack->add_session(($quantity_affected > 1 ? sprintf(PWA_DELETED_VARIANT_ALL, $quantity_affected /*$query_result->fields['rows']*/) : PWA_DELETED_VARIANT), 'failure');
         zen_redirect(zen_href_link(FILENAME_PRODUCTS_WITH_ATTRIBUTES_STOCK, 'updateReturnedPID=' . (int)$_POST['products_id'], $request_type));
       } else {
         zen_redirect(zen_href_link(FILENAME_PRODUCTS_WITH_ATTRIBUTES_STOCK, 'updateReturnedPID=' . (int)$_POST['products_id'], $request_type));
@@ -626,7 +643,7 @@ switch ($action) {
     if (isset($_GET['products_id']) && (int)$_GET['products_id'] > 0) {
 
       $stock->update_parent_products_stock((int) $_GET['products_id']);
-      $messageStack->add_session('Parent Product Quantity Updated', 'success');
+      $messageStack->add_session(PWA_PARENT_QUANTITY_UPDATE_SUCCESS, 'success');
       zen_redirect(zen_href_link(FILENAME_PRODUCTS_WITH_ATTRIBUTES_STOCK, 'updateReturnedPID=' . (int)$_GET['products_id'], $request_type));
     } else {
       zen_redirect(zen_href_link(FILENAME_PRODUCTS_WITH_ATTRIBUTES_STOCK, '', $request_type));
@@ -635,7 +652,7 @@ switch ($action) {
 
   case 'resync_all':
     $stock->update_all_parent_products_stock();
-    $messageStack->add_session('Parent Product Quantities Updated', 'success');
+    $messageStack->add_session(PWA_PARENT_QUANTITIES_UPDATE_SUCCESS, 'success');
     zen_redirect(zen_href_link(FILENAME_PRODUCTS_WITH_ATTRIBUTES_STOCK, '', $request_type));
     break;
 
@@ -714,7 +731,7 @@ switch ($action) {
       }
       unset($part_array);
     }
-    $messageStack->add_session($count . ' stock attributes updated for sort by primary attribute sort order', 'success');
+    $messageStack->add_session(sprintf(PWA_SORT_UPDATE_SUCCESS, $count), 'success');
     zen_redirect(zen_href_link(FILENAME_PRODUCTS_WITH_ATTRIBUTES_STOCK, '', $request_type));
     break;
 

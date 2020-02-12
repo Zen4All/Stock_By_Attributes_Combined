@@ -166,7 +166,7 @@ class products_with_attributes_stock extends base {
   
   /**
    * NOTIFY_ZEN_HAS_PRODUCT_ATTRIBUTES_VALUES
-      ZC: 1.56 inserted.
+      ZC: 1.56 inserted. Used to identify if attributes affect product's price.
         $value_to_return = '';
         $GLOBALS['zco_notifier']->notify('NOTIFY_ZEN_HAS_PRODUCT_ATTRIBUTES_VALUES', $products_id, $value_to_return);
         if ($value_to_return !== '') {
@@ -177,7 +177,7 @@ class products_with_attributes_stock extends base {
     
     // Saves a database lookup that has or should have already been done.
     if (isset($this->_isSBA) && $this->_isSBA || !isset($this->_isSBA) && $_SESSION['pwas_class2']->zen_product_is_sba($_GET['products_id'])) {
-      $value_to_return = true;
+//      $value_to_return = true;
     }
   }
   /*
@@ -198,17 +198,18 @@ class products_with_attributes_stock extends base {
        $this->_products_options_names_count = $products_options_names->RecordCount();
      }
 //     $products_options_names_count = $products_options_names->RecordCount();
-
+     $this->_isSBA = false;
+     
      if ($_SESSION['pwas_class2']->zen_product_is_sba($_GET['products_id'])) {
        $this->_isSBA = true;
-     } else {
-       $this->_isSBA = false;
      }
      
 //     $stock->_isSBA = $this->_isSBA;
      $is_SBA_product = $this->_isSBA;
      
-     if ($this->_isSBA) {
+     if (!$this->_isSBA) {
+      return;
+     }
        // Want to do a SQL statement to see the quantity of non-READONLY attributes.  If there is only one non-READONLY attribute, then
        //   do additional SQL to add the "missing" attributes that would get displayed.  But, do not have the "main" sql modified otherwise
        //   the display will get all wonky (multiple listings where not desired).  Will need to modify the SQL result for each result applicable to the
@@ -250,9 +251,9 @@ class products_with_attributes_stock extends base {
                   || ($process_this == true && isset($noread) && $noread->fields['total'] == 1)
                 )
                 && defined('SBA_SHOW_OUT_OF_STOCK_ATTR_ON_PRODUCT_INFO') && SBA_SHOW_OUT_OF_STOCK_ATTR_ON_PRODUCT_INFO == '0'
-                && (defined('PRODINFO_ATTRIBUTE_DYNAMIC_STATUS') ? (PRODINFO_ATTRIBUTE_DYNAMIC_STATUS !=1 && PRODINFO_ATTRIBUTE_DYNAMIC_STATUS !=3) : true)
-                && (defined('PRODUCTS_OPTIONS_TYPE_GRID') ? $products_options_names->fields['products_options_type'] != PRODUCTS_OPTIONS_TYPE_GRID : true)
-                && (defined('PRODUCTS_OPTIONS_TYPE_ATTRIBUTE_GRID') ? $products_options_names->fields['products_options_type'] != PRODUCTS_OPTIONS_TYPE_ATTRIBUTE_GRID : true)
+                && (!defined('PRODINFO_ATTRIBUTE_DYNAMIC_STATUS') || (PRODINFO_ATTRIBUTE_DYNAMIC_STATUS != '1' && PRODINFO_ATTRIBUTE_DYNAMIC_STATUS != '3'))
+                && (!defined('PRODUCTS_OPTIONS_TYPE_GRID') || $products_options_names->fields['products_options_type'] != PRODUCTS_OPTIONS_TYPE_GRID)
+                && (!defined('PRODUCTS_OPTIONS_TYPE_ATTRIBUTE_GRID') || $products_options_names->fields['products_options_type'] != PRODUCTS_OPTIONS_TYPE_ATTRIBUTE_GRID)
               ) 
                ? " AND (pas.quantity > '0' OR (pas.quantity IS NULL AND pa.attributes_display_only = '1')) "
                : ""
@@ -265,7 +266,6 @@ class products_with_attributes_stock extends base {
        $sql = $db->bindVars($sql, ':languages_id:', $_SESSION['languages_id'], 'integer');
 
        $products_options = $db->Execute($sql);
-     }
    }
 
   /*
@@ -293,7 +293,7 @@ class products_with_attributes_stock extends base {
       //add out of stock text based on qty
       if ((!isset($products_options_fields['pasqty']) || $products_options_fields['pasqty'] < 1) && STOCK_CHECK == 'true' && isset($products_options_fields['pasid']) && $products_options_fields['pasid'] > 0) {
         //test, only applicable to products with-out the display-only attribute set
-        if (!isset($products_options_DISPLAYONLY->fields['attributes_display_only']) || ($products_options_DISPLAYONLY->fields['attributes_display_only'] < 1)) {
+        if (empty($products_options_DISPLAYONLY->fields['attributes_display_only'])) {
           $products_options_fields['products_options_values_name'] = $products_options_fields['products_options_values_name'] . PWA_OUT_OF_STOCK;
           // $i in includes/modules/YOUR_TEMPLATE/attributes.php is post incremented ($i++) meaning it is sent here with the 
           //   current value, but upon return will be incremented by 1.  Therefore within this function it should be considered as 
@@ -304,13 +304,21 @@ class products_with_attributes_stock extends base {
         }
       }
 
+      $show_custom_id_flag = isset($products_options_fields['customid'])
+          && zen_not_null($products_options_fields['customid'])
+          && (
+              !defined('ATTRIBUTES_SBA_DISPLAY_CUSTOMID')
+              || (STOCK_SBA_DISPLAY_CUSTOMID == 'true' && ATTRIBUTES_SBA_DISPLAY_CUSTOMID == '1')
+              || ATTRIBUTES_SBA_DISPLAY_CUSTOMID == '2'
+              || (ATTRIBUTES_SBA_DISPLAY_CUSTOMID == '3' && $products_options_names->RecordCount() > 1)
+             );
       //Add qty to atributes based on STOCK_SHOW_ATTRIB_LEVEL_STOCK setting
       //Only add to Radio, Checkbox, and selection lists
       //PRODUCTS_OPTIONS_TYPE_RADIO PRODUCTS_OPTIONS_TYPE_CHECKBOX
       //Exclude the following:
       //PRODUCTS_OPTIONS_TYPE_TEXT PRODUCTS_OPTIONS_TYPE_FILE PRODUCTS_OPTIONS_TYPE_READONLY
       //PRODUCTS_OPTIONS_TYPE_SELECT_SBA
-      $PWA_STOCK_QTY = null; //initialize variable
+      $PWA_STOCK_QTY = ''; //initialize variable
       if ($products_options_names->fields['products_options_type'] != PRODUCTS_OPTIONS_TYPE_TEXT) {
         if ($products_options_names->fields['products_options_type'] != PRODUCTS_OPTIONS_TYPE_FILE) {
           if ($products_options_names->fields['products_options_type'] != PRODUCTS_OPTIONS_TYPE_READONLY) {
@@ -318,16 +326,16 @@ class products_with_attributes_stock extends base {
 
               if (STOCK_SHOW_ATTRIB_LEVEL_STOCK == 'true' && isset($products_options_fields['pasqty']) && $products_options_fields['pasqty'] > 0) {
                 //test, only applicable to products with-out the display-only attribute set
-                if ($products_options_DISPLAYONLY->fields['attributes_display_only'] < 1) {
+                if (empty($products_options_DISPLAYONLY->fields['attributes_display_only'])) {
                   $PWA_STOCK_QTY = PWA_STOCK_QTY . $products_options_fields['pasqty'] . ' ';
                   //show custom ID if flag set to true
-                  if (zen_not_null($products_options_fields['customid']) && (!defined('ATTRIBUTES_SBA_DISPLAY_CUSTOMID') || (STOCK_SBA_DISPLAY_CUSTOMID == 'true' && ATTRIBUTES_SBA_DISPLAY_CUSTOMID == '1') || ATTRIBUTES_SBA_DISPLAY_CUSTOMID == '2')) {
+                  if ($show_custom_id_flag) {
                     $PWA_STOCK_QTY .= ' (' . $products_options_fields['customid'] . ') ';
                   }
                 }
-              } elseif (STOCK_SHOW_ATTRIB_LEVEL_STOCK == 'true' && (!isset($products_options_fields['pasqty']) || ($products_options_fields['pasqty'] < 1)) && (!isset($products_options_fields['pasid']) || ($products_options_fields['pasid'] < 1))) {
+              } elseif (STOCK_SHOW_ATTRIB_LEVEL_STOCK == 'true' && (!isset($products_options_fields['pasqty']) || ($products_options_fields['pasqty'] < 1)) && empty($products_options_fields['pasid'])) {
                 //test, only applicable to products with-out the display-only attribute set
-                if (!isset($products_options_DISPLAYONLY->fields['attributes_display_only']) || ($products_options_DISPLAYONLY->fields['attributes_display_only'] < 1)) {
+                if (empty($products_options_DISPLAYONLY->fields['attributes_display_only'])) {
                   //use the qty from the product, unless it is 0, then set to out of stock.
                   if (!isset($this->_products_options_names_count) || ($this->_products_options_names_count <= 1)) {
                     if ($products_options_fields['products_quantity'] > 0) {
@@ -344,11 +352,11 @@ class products_with_attributes_stock extends base {
                   }
 
                   //show custom ID if flag set to true
-                  if (isset($products_options_fields['customid']) && zen_not_null($products_options_fields['customid']) && (!defined('ATTRIBUTES_SBA_DISPLAY_CUSTOMID') || (STOCK_SBA_DISPLAY_CUSTOMID == 'true' && ATTRIBUTES_SBA_DISPLAY_CUSTOMID == '1') || ATTRIBUTES_SBA_DISPLAY_CUSTOMID == '2')) {
+                  if ($show_custom_id_flag) {
                     $PWA_STOCK_QTY .= ' (' . $products_options_fields['customid'] . ') ';
                   }
                 }
-              } elseif (isset($products_options_fields['customid']) && zen_not_null($products_options_fields['customid']) && (!defined('ATTRIBUTES_SBA_DISPLAY_CUSTOMID') || (STOCK_SBA_DISPLAY_CUSTOMID == 'true' && ATTRIBUTES_SBA_DISPLAY_CUSTOMID == '1') || ATTRIBUTES_SBA_DISPLAY_CUSTOMID == '2')) {
+              } elseif ($show_custom_id_flag) {
                 //show custom ID if flag set to true
                 //test, only applicable to products with-out the display-only attribute set
                 if ($products_options_DISPLAYONLY->fields['attributes_display_only'] < 1) {
@@ -373,10 +381,10 @@ class products_with_attributes_stock extends base {
       //if ($this->_products_options_names_current == 1)
       {
         $picture = $db->Execute('SELECT p.products_image FROM ' . TABLE_PRODUCTS . ' p WHERE products_id = ' . (int)$_GET['products_id']);
-        if ($picture->EOF || $picture->RecordCount() == 0) {
-          $this->_options_menu_images['product_image'] = '';
-        } else {
-          $this->_options_menu_images['product_image'] = DIR_WS_IMAGES . $picture->fields['products_image'];
+
+        $this->_options_menu_images['product_image'] = '';
+        if ($picture->RecordCount() > 0) {
+          $this->_options_menu_images['product_image'] .= DIR_WS_IMAGES . $picture->fields['products_image'];
         }
       }
       // END "Stock by Attributes" SBA
@@ -411,8 +419,13 @@ class products_with_attributes_stock extends base {
   function updateNotifyAttributesModuleOriginalPrice(&$callingClass, $notifier, $paramsArray){
     global /*$db, */$products_options, $products_options_names, $currencies, $new_attributes_price, $product_info, $products_options_display_price, $PWA_STOCK_QTY;
     
-    if ($this->_isSBA 
-        && (
+    // If not even an SBA selection, then don't do anything with it.
+    if (!$this->_isSBA) {
+      return;
+    }
+    
+    if (
+          (
             in_array($products_options_names->fields['products_options_type'], array(PRODUCTS_OPTIONS_TYPE_SELECT_SBA, PRODUCTS_OPTIONS_TYPE_RADIO, PRODUCTS_OPTIONS_TYPE_CHECKBOX, PRODUCTS_OPTIONS_TYPE_FILE, PRODUCTS_OPTIONS_TYPE_TEXT, PRODUCTS_OPTIONS_TYPE_SELECT)) 
             || (
                 (PRODINFO_ATTRIBUTE_DYNAMIC_STATUS == '0' 
@@ -427,15 +440,16 @@ class products_with_attributes_stock extends base {
       // START "Stock by Attributes" SBA added original price for display, and some formatting
       $originalpricedisplaytext = null;
       $attributes_price_final = zen_get_attributes_price_final($products_options->fields["products_attributes_id"], 1, '', 'false');
-      if (STOCK_SHOW_ORIGINAL_PRICE_STRUCK == 'true' && !($attributes_price_final == $new_attributes_price || ($attributes_price_final == -$new_attributes_price && ((int)($products_options->fields['price_prefix'] . "1") * $products_options->fields['options_values_price']) < 0)) ) {
+//      if (STOCK_SHOW_ORIGINAL_PRICE_STRUCK == 'true' && !($attributes_price_final == $new_attributes_price || ($attributes_price_final == -$new_attributes_price && ((int)($products_options->fields['price_prefix'] . "1") * $products_options->fields['options_values_price']) < 0)) ) {
+      if (STOCK_SHOW_ORIGINAL_PRICE_STRUCK == 'true' && !($products_options->fields['attributes_display_only'] && $products_options->fields['attributes_default'] && !$products_options->fields['products_options_sort_order']) && ($attributes_price_final == $new_attributes_price || (($attributes_price_final == -$new_attributes_price) && ((int)($products_options->fields['price_prefix'] . "1") * $products_options->fields['options_values_price']) < 0)) ) {
         //Original price struck through
         if ($products_options_names->fields['products_options_type'] == PRODUCTS_OPTIONS_TYPE_RADIO || $products_options_names->fields['products_options_type'] == PRODUCTS_OPTIONS_TYPE_CHECKBOX) {
           //use this if a PRODUCTS_OPTIONS_TYPE_RADIO or PRODUCTS_OPTIONS_TYPE_CHECKBOX
           //class="normalprice" can be used in a CSS file to control the text properties, not compatable with selection lists
-          $originalpricedisplaytext = ATTRIBUTES_PRICE_DELIMITER_PREFIX . '<span class="normalprice">' . $products_options->fields['price_prefix'] . $currencies->display_price($attributes_price_final, zen_get_tax_rate($product_info->fields['products_tax_class_id'])) . '</span>' . ATTRIBUTES_PRICE_DELIMITER_SUFFIX;
+          $originalpricedisplaytext = ATTRIBUTES_PRICE_DELIMITER_PREFIX . '<span class="normalprice">' . $products_options->fields['price_prefix'] . $currencies->display_price($products_options->fields['options_values_price'], zen_get_tax_rate($product_info->fields['products_tax_class_id'])) . '</span>' . ATTRIBUTES_PRICE_DELIMITER_SUFFIX;
         } else {
           //need to remove the <span> tag for selection lists and text boxes
-          $originalpricedisplaytext = ATTRIBUTES_PRICE_DELIMITER_PREFIX . $products_options->fields['price_prefix'] . $currencies->display_price(abs($attributes_price_final), zen_get_tax_rate($product_info->fields['products_tax_class_id'])) . ATTRIBUTES_PRICE_DELIMITER_SUFFIX;
+          $originalpricedisplaytext = ATTRIBUTES_PRICE_DELIMITER_PREFIX . $products_options->fields['price_prefix'] . $currencies->display_price(abs($products_options->fields['options_values_price']), zen_get_tax_rate($product_info->fields['products_tax_class_id'])) . ATTRIBUTES_PRICE_DELIMITER_SUFFIX;
         }
       }
 
@@ -452,7 +466,7 @@ class products_with_attributes_stock extends base {
     
 //       if ($this->_isSBA && (PRODINFO_ATTRIBUTE_DYNAMIC_STATUS == '1' || (PRODINFO_ATTRIBUTE_DYNAMIC_STATUS == '2' && $products_options_names->RecordCount() > 1) || (PRODINFO_ATTRIBUTE_DYNAMIC_STATUS == '3' && $products_options_names->RecordCount() == 1))) {  // Perhaps only certain features need to be bypassed, but for now all mc12345678
     $disablebackorder = null;
-    if (!$this->_isSBA || ($this->_isSBA && PRODINFO_ATTRIBUTE_DYNAMIC_STATUS == '0' && $products_options_names->fields['products_options_type'] != PRODUCTS_OPTIONS_TYPE_SELECT_SBA) || ($this->_isSBA && PRODINFO_ATTRIBUTE_DYNAMIC_STATUS == '2' && $products_options_names->RecordCount() == 1 && $products_options_names->fields['products_options_type'] != PRODUCTS_OPTIONS_TYPE_SELECT_SBA) || ($this->_isSBA && PRODINFO_ATTRIBUTE_DYNAMIC_STATUS == '3' && $products_options_names->RecordCount() > 1)) {
+    if (!$this->_isSBA || (PRODINFO_ATTRIBUTE_DYNAMIC_STATUS == '0' && $this->products_options_names_fields['products_options_type'] != PRODUCTS_OPTIONS_TYPE_SELECT_SBA) || (PRODINFO_ATTRIBUTE_DYNAMIC_STATUS == '2' && $this->_products_options_names_count == 1 && $this->products_options_names_fields['products_options_type'] != PRODUCTS_OPTIONS_TYPE_SELECT_SBA) || (PRODINFO_ATTRIBUTE_DYNAMIC_STATUS == '3' && $this->_products_options_names_count > 1)) {
       return;
     }
 
@@ -463,8 +477,8 @@ class products_with_attributes_stock extends base {
     }
 
     //disable radio and disable default selected
-    if ((STOCK_ALLOW_CHECKOUT == 'false' && $products_options->fields['pasqty'] <= 0 && !empty($products_options->fields['pasid']) )
-    || ( STOCK_ALLOW_CHECKOUT == 'false' && $products_options->fields['products_quantity'] <= 0 && empty($products_options->fields['pasid']) )
+    if ((STOCK_ALLOW_CHECKOUT == 'false' && (empty($products_options->fields['pasqty']) || $products_options->fields['pasqty'] <= 0) && !empty($products_options->fields['pasid']) )
+    || ( STOCK_ALLOW_CHECKOUT == 'false' && (empty($products_options->fields['products_quantity']) || $products_options->fields['products_quantity'] <= 0) && empty($products_options->fields['pasid']) )
     ) {//|| $products_options_READONLY->fields['attributes_display_only'] == 1
       if ($selected_attribute == true) {
         $selected_attribute = false;
@@ -542,11 +556,11 @@ class products_with_attributes_stock extends base {
               //  if all are disabled, then what is to be addressed? Should it be programatic or
         while (!$products_opt->EOF) {
           if ($prevent_checkout && $products_opt->fields['pasqty'] <= 0 && ($products_opt->fields['attributes_display_only'] && $products_opt->fields['attributes_default'])) {
-            $disablebackorder[] = NULL;
+            $disablebackorder[] = null;
           } elseif ($prevent_checkout && $products_opt->fields['pasqty'] <= 0 && /*$products_opt->fields['products_options_values_id'] != $selected_attribute &&*/ $products_opt->fields['attributes_display_only'] && !$products_opt->fields['attributes_default']) { // If the first item is set as disabled and there is no default, then this could cause the product to be incorrectly added to the cart.
             $disablebackorder[] = ' disabled="disabled" ';
           } elseif ($prevent_checkout && $products_opt->fields['pasqty'] <= 0 && $products_opt->fields['attributes_default']) { // If the first item is set as disabled and there is no default, then this could cause the product to be incorrectly added to the cart.
-            $disablebackorder[] = NULL;
+            $disablebackorder[] = null;
           } elseif ($prevent_checkout && $products_opt->fields['pasqty'] <= 0) {
             $disablebackorder[] = ' disabled="disabled" ';
           } else {  
@@ -591,6 +605,26 @@ class products_with_attributes_stock extends base {
                                                       || SBA_SHOW_IMAGE_ON_PRODUCT_INFO === '4')) {
       $options_attributes_image = array();
     }
+    
+    // Problem with the below code moving forwards is that if the selection remains blank, then 
+    //   the verification in the add-to-cart section does not seem to flag this as an issue
+    //   allowing the product to be added to the cart without an attribute selected.
+    // This is regardless of the radio button being preselected or not.
+    // If the radio button remains selected as a default, then when attempting to add the product
+    //   to the cart, the user is notified that an incorrect selection was made and to correct the selection.
+    /*if ($products_options_names_fields['products_options_type'] == PRODUCTS_OPTIONS_TYPE_SELECT_SBA) {
+      if ($GLOBALS['products_options']->RecordCount() == 1) {
+        $disablebackorder = '';
+        
+        if ((STOCK_ALLOW_CHECKOUT == 'false' && $GLOBALS['products_options']->fields['pasqty'] <= 0 && !empty($GLOBALS['products_options']->fields['pasid']) )
+        || ( STOCK_ALLOW_CHECKOUT == 'false' && $GLOBALS['products_options']->fields['products_quantity'] <= 0 && empty($GLOBALS['products_options']->fields['pasid']) )
+        ) {//|| $products_options_READONLY->fields['attributes_display_only'] == 1
+          $disablebackorder = ' disabled="disabled" ';
+        }
+        $old_options_menu = array_pop($options_menu);
+        $options_menu[] = zen_draw_radio_field('id[' . $products_options_names_fields['products_options_id'] . ']', $GLOBALS['products_options_value_id'], empty($disablebackorder), $disablebackorder . 'id="' . 'attrib-' . $products_options_names_fields['products_options_id'] . '-' . $GLOBALS['products_options_value_id'] . '"') . '<label class="attribsRadioButton" for="' . 'attrib-' . $products_options_names_fields['products_options_id'] . '-' . $GLOBALS['products_options_value_id'] . '">' . $GLOBALS['products_options_details'] . '</label>' . "\n";
+      }
+    }*/
   }
    
   /*
@@ -1098,6 +1132,7 @@ class products_with_attributes_stock extends base {
         //  $products_options_type is not yet used for anything else, but was perhaps to address something specific in future
         //  coding.  It will remain off of here for now.
         $custom_multi_query = $_SESSION['pwas_class2']->zen_get_sba_attribute_info($productArray[$i]['id'], $productArray[$i]['attributes'], 'products');
+        $custom_type = 'single';
 
         if (!isset($custom_multi_query) || $custom_multi_query === NULL || $custom_multi_query === false) {
           $custom_type = 'none';
@@ -1107,8 +1142,6 @@ class products_with_attributes_stock extends base {
             $customid_new = $_SESSION['pwas_class2']->zen_get_customid($productArray[$i]['id'], $value);
             $productArray[$i]['attributes'][$key]['customid'] = ((STOCK_SBA_DISPLAY_CUSTOMID == 'true') ? $customid_new : null);
           }
-        } else {
-          $custom_type = 'single';
         }
         $productArray[$i]['customid']['type'] = $custom_type;
         $productArray[$i]['customid']['value'] = (STOCK_SBA_DISPLAY_CUSTOMID == 'true') ? $_SESSION['pwas_class2']->zen_get_customid($productArray[$i]['id'], $products[$i]['attributes']) : null;
