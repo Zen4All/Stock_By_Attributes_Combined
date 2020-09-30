@@ -16,6 +16,16 @@ require(DIR_WS_CLASSES . 'currencies.php');
 $currencies = new currencies();
 //require(DIR_WS_CLASSES . 'products_with_attributes_stock.php');
 
+// Adds a function used here not introduced until Zen Cart 1.5.5.
+//   Below can be removed from systems fully running Zen Cart 1.5.5 or above.
+if (!function_exists('zen_draw_label')) {
+  function zen_draw_label($text, $for, $parameters = '')
+  {
+      $label = '<label for="' . $for . '"' . (!empty($parameters) ? ' ' . $parameters : '') . '>' . $text . '</label>';
+      return $label;
+  }
+}
+
 //new object from class
 //$stock = new products_with_attributes_stock;
 $stock = $products_with_attributes_stock_class;
@@ -136,11 +146,11 @@ switch ($action) {
     } else {
 
       $query = 'SELECT DISTINCT
-                        pa.products_id, d.products_name
+                        pa.products_id, pd.products_name
                       FROM ' . TABLE_PRODUCTS_ATTRIBUTES . ' pa
-                          left join ' . TABLE_PRODUCTS_DESCRIPTION . ' d on (pa.products_id = d.products_id)
-                      WHERE d.language_id= :language_id: 
-                      order by d.products_name';
+                          LEFT JOIN ' . TABLE_PRODUCTS_DESCRIPTION . ' pd ON (pa.products_id = pd.products_id)
+                      WHERE pd.language_id= :language_id:
+                      ORDER BY pd.products_name';
       $query = $db->bindVars($query, ':language_id:', $language_id, 'integer');
       
       $products = $db->execute($query);
@@ -194,7 +204,9 @@ switch ($action) {
     break;
 
   case 'confirm':
-    if (isset($_POST['products_id']) && (int) $_POST['products_id'] > 0) {
+    if (!(isset($_POST['products_id']) && (int) $_POST['products_id'] > 0)) {
+      zen_redirect(zen_href_link(FILENAME_PRODUCTS_WITH_ATTRIBUTES_STOCK, zen_get_all_get_params(array('action')), $request_type));
+    }
 
       if (!isset($_POST['quantity']) || !is_numeric($_POST['quantity'])) {
         $messageStack->add_session(PWA_QUANTITY_MISSING, 'failure');
@@ -285,9 +297,6 @@ switch ($action) {
         $hidden_form .= zen_draw_hidden_field('add_edit', 'add') . "\n";
         $s_mack_noconfirm .="add_edit=add&"; //s_mack:noconfirm
       }
-    } else {
-      zen_redirect(zen_href_link(FILENAME_PRODUCTS_WITH_ATTRIBUTES_STOCK, zen_get_all_get_params(array('action')), $request_type));
-    }
     zen_redirect(zen_href_link(FILENAME_PRODUCTS_WITH_ATTRIBUTES_STOCK, $s_mack_noconfirm . "action=execute", $request_type)); //s_mack:noconfirm
     break;
 
@@ -321,6 +330,7 @@ switch ($action) {
     $customid = (isset($_POST['customid']) ? $_POST['customid'] : $customid);
     $customid = trim($customid);
     $customid = zen_db_prepare_input($customid);
+    $customid = zen_db_input($customid);
 /*    if (isset($_GET['customid']) && $_GET['customid']) {
       $customid = zen_db_input(trim($_GET['customid']));
     } //s_mack:noconfirm
@@ -329,7 +339,7 @@ switch ($action) {
     }*/
 
     $skuTitle = null;
-    if ($_GET['skuTitle']) {
+    if (isset($_GET['skuTitle']) && $_GET['skuTitle']) {
       $skuTitle = zen_db_input(trim($_GET['skuTitle']));
     }
     if (isset($_POST['skuTitle'])) {
@@ -672,7 +682,7 @@ switch ($action) {
         $options_order_by= ' order by po.products_options_name';
       }
 
-      $sort_query = "SELECT DISTINCT pa.products_attributes_id, pov.products_options_values_sort_order as sort
+      $sort_query = "SELECT DISTINCT pa.products_attributes_id, pov.products_options_values_sort_order as sort, po.products_options_sort_order, po.products_options_name
              FROM " . TABLE_PRODUCTS_ATTRIBUTES . " pa
              LEFT JOIN " . TABLE_PRODUCTS_OPTIONS_VALUES . " pov on (pov.products_options_values_id = pa.options_values_id)
              LEFT JOIN " . TABLE_PRODUCTS_OPTIONS . " po on (po.products_options_id = pa.options_id) 
@@ -734,6 +744,87 @@ switch ($action) {
     $messageStack->add_session(sprintf(PWA_SORT_UPDATE_SUCCESS, $count), 'success');
     zen_redirect(zen_href_link(FILENAME_PRODUCTS_WITH_ATTRIBUTES_STOCK, '', $request_type));
     break;
+  case 'search-all':
+
+    if (isset($_POST['pwas-adjust-qty-button'])) {
+      if (!empty($_POST['pwas-adjust-qty'])) {
+        $SearchRange = '';
+        $seachBox = '';
+        if (isset($_GET['search'])) {
+          $seachBox = trim($_GET['search']);
+        }
+        // Posted content overrides url content.
+        if (isset($_POST['search'])) {
+          $seachBox = trim($_POST['search']);
+        }
+        $s = zen_db_input($seachBox);
+
+        $change = 0.0;
+        if (isset($_POST['pwas-adjust-qty'])) {
+          $change = (float)$_POST['pwas-adjust-qty'];
+        }
+        
+        $w = " AND pwas.customid LIKE '%$s' ";
+        $query_products = "SELECT pwas.stock_id, products_id
+                      FROM " . TABLE_PRODUCTS_WITH_ATTRIBUTES_STOCK . " pwas
+                      WHERE pwas.customid
+                          LIKE '%$s%'
+                      ORDER BY pwas.stock_id ASC";
+        
+        $products_answer = $db->Execute($query_products);
+        
+        // No records found by seaarch, provide notification that nothing to adjust and the content of the search.
+        if ($products_answer->RecordCount() == 0) {
+          $messageStack->add_session(sprintf(PWA_ADJUST_QUANTITY_NONE_FOUND, $s, $change), 'caution');
+          zen_redirect(zen_href_link(FILENAME_PRODUCTS_WITH_ATTRIBUTES_STOCK, zen_get_all_get_params(array('action', 'pwas-search-button')) . '&search=' . $s, $request_type));
+        }
+        
+        // Directly process result if only one is found, though perhaps this should
+        //   be an option instead of a guarantee?
+        if (!$products_answer->EOF && $products_answer->RecordCount() == 1) {
+// matching record found, can do add and then report. @TODO
+          $sql = "UPDATE " . TABLE_PRODUCTS_WITH_ATTRIBUTES_STOCK . "
+                  SET quantity = quantity + " . $change . "
+                  WHERE stock_id = " . $products_answer->fields['stock_id'];
+          
+          $result = $db->Execute($sql);
+          
+          if (method_exists($db, 'affectedRows')) {
+            $quantity_affected = $db->affectedRows();
+          } else {
+            $query_result = $db->Execute("SELECT ROW_COUNT() rows;");
+            $quantity_affected = $query_result->fields['rows'];
+          }
+
+          
+          // If the change happened, then report it.
+          if ($quantity_affected > 0) {
+            $seachPID = $products_answer->fields['products_id'];
+
+            $sql = "SELECT quantity FROM " . TABLE_PRODUCTS_WITH_ATTRIBUTES_STOCK . "
+                    WHERE stock_id = " . $products_answer->fields['stock_id'];
+
+            if (method_exists('ExecuteNoCache', $db)) {
+              $result = $db->ExecuteNoCache($sql);
+            } else {
+              $result = $db->Execute($sql, false, false, 0, true);
+            }
+            
+            $final_quantity = 0;
+            if (!$result->EOF) {
+              $final_quantity = $result->fields['quantity'];
+            }
+
+            $messageStack->add_session(sprintf(PWA_ADJUST_QUANTITY_SUCCESS, $seachPID, $products_answer->fields['stock_id'], $s, $change, $final_quantity), 'success');
+            zen_redirect(zen_href_link(FILENAME_PRODUCTS_WITH_ATTRIBUTES_STOCK, zen_get_all_get_params(array('action', 'pwas-search-button')) . '&search=' . $s, $request_type));
+          }
+        } else if (!$products_answer->EOF) {
+          // multiple records found, need to display and offer options.
+          $messageStack->add_session(sprintf(PWA_ADJUST_QUANTITY_MULTIPLE_NOT_SUPPORTED_YET, $s, $change), 'info');
+          zen_redirect(zen_href_link(FILENAME_PRODUCTS_WITH_ATTRIBUTES_STOCK, zen_get_all_get_params(array('action', 'pwas-search-button')) . '&search=' . $s, $request_type));
+        }
+      }
+    }
 
   default:
 
@@ -759,6 +850,12 @@ switch ($action) {
     if (!$sniffer->field_exists(TABLE_PRODUCTS_DESCRIPTION, $search_order_by)) {
       $search_order_by = 'products_model';
     }
+  }
+  if ($sniffer->field_exists(TABLE_PRODUCTS, $search_order_by)) {
+    $search_order_by = 'p.' . $search_order_by;
+  }
+  if ($sniffer->field_exists(TABLE_PRODUCTS_DESCRIPTION, $search_order_by)) {
+    $search_order_by = 'pd.' . $search_order_by;
   }
 
 
@@ -1019,13 +1116,35 @@ If <strong>"ALL"</strong> is selected, the <?php echo PWA_SKU_TITLE; ?> will not
       $seachPID = '' . $seachPID . '';
     } elseif (isset($_GET['search']) || isset($_POST['search'])) {
       $SearchRange = '';
-      $seachBox = trim($_GET['search']);
+      $seachBox = '';
+      if (isset($_GET['search'])) {
+        $seachBox = trim($_GET['search']);
+      }
       if (isset($_POST['search'])) {
         $seachBox = trim($_POST['search']);
       }
       $s = zen_db_input($seachBox);
-      $w = " AND ( p.products_id = '$s' OR d.products_name LIKE '%$s%' OR p.products_model LIKE '$s%' ) ";
-      $query_products = "select distinct pa.products_id FROM " . TABLE_PRODUCTS_ATTRIBUTES . " pa, " . TABLE_PRODUCTS_DESCRIPTION . " d, " . TABLE_PRODUCTS . " p WHERE d.language_id='" . $language_id . "' and pa.products_id = d.products_id and pa.products_id = p.products_id " . $w . " order by d.products_name " . $SearchRange . "";
+      $w = " AND ( p.products_id = '$s'
+              OR pd.products_name
+                LIKE '%$s%' 
+              OR p.products_model 
+                LIKE '%$s%' 
+              OR p.products_id 
+                IN (SELECT products_id 
+                      FROM " . TABLE_PRODUCTS_WITH_ATTRIBUTES_STOCK. " pwas 
+                      WHERE pwas.customid 
+                        LIKE '%$s%'))";
+      
+      $query_products = "SELECT distinct pa.products_id, pd.products_name
+                          FROM " . TABLE_PRODUCTS_ATTRIBUTES . " pa,
+                          " . TABLE_PRODUCTS_DESCRIPTION . " pd,
+                          " . TABLE_PRODUCTS . " p
+                          WHERE pd.language_id=" . (int)$language_id . "
+                          AND pa.products_id = pd.products_id
+                          AND pa.products_id = p.products_id 
+                          " . $w . " 
+                          ORDER BY pd.products_name
+                          " . $SearchRange;
       $products_answer = $db->Execute($query_products);
       if (!$products_answer->EOF && $products_answer->RecordCount() == 1 ) {
         $seachPID = $products_answer->fields['products_id'];
@@ -1067,44 +1186,56 @@ If <strong>"ALL"</strong> is selected, the <?php echo PWA_SKU_TITLE; ?> will not
     if (STOCK_SBA_SEARCHLIST == 'true') {
       //Product Selection Listing at top of page
       $searchList = 'select distinct pa.products_id, pd.products_name,
-                 p.products_model
+                 p.products_model, :search_order_by:
                    FROM ' . TABLE_PRODUCTS_ATTRIBUTES . ' pa
                   left join ' . TABLE_PRODUCTS_DESCRIPTION . ' pd on (pa.products_id = pd.products_id)
                   left join ' . TABLE_PRODUCTS . ' p on (pa.products_id = p.products_id)
                 WHERE pd.language_id = ' . $language_id . '
                 order by :search_order_by:'; //order by may be changed to: products_id, products_model, products_name
       $searchList = $db->bindVars($searchList, ':search_order_by:', $search_order_by, 'noquotestring');
-
+?><table>
+	      <tbody>
+	      <tr>
+	      <td>
+<?php
       echo zen_draw_form('pwas-search', FILENAME_PRODUCTS_WITH_ATTRIBUTES_STOCK, 'search_order_by=' . $search_order_by, 'get', '', true) . "Product Selection List:";
       echo $searchList = $stock->selectItemID(TABLE_PRODUCTS_ATTRIBUTES, 'pa.products_id', $seachPID, $searchList, 'seachPID', 'seachPID', 'selectSBAlist');
       echo zen_draw_input_field('pwas-search-button', 'Search', '', true, 'submit', true);
       echo zen_draw_hidden_field('search_order_by', $search_order_by);
 ?>
       </form>
+</td>
+
       <td valign="top" align="left">
         <form name="search_order_by" action="<?php echo zen_href_link(FILENAME_PRODUCTS_WITH_ATTRIBUTES_STOCK, 'search_order_by=' . $search_order_by, 'SSL'); ?>">
           <select name="selected" onChange="go_search()">
-            <option value="products_model"<?php if ($search_order_by == 'products_model') { echo ' SELECTED'; } ?>><?php echo PWA_PRODUCT_MODEL; ?></option>
-            <option value="products_id"<?php if ($search_order_by == 'products_id') { echo ' SELECTED'; } ?>><?php echo PWA_PRODUCT_ID; ?></option>
-            <option value="products_name"<?php if ($search_order_by == 'products_name') { echo ' SELECTED'; } ?>><?php echo PWA_PRODUCT_NAME; ?></option>
+            <option value="products_model"<?php if ($search_order_by == 'p.products_model') { echo ' SELECTED'; } ?>><?php echo PWA_PRODUCT_MODEL; ?></option>
+            <option value="products_id"<?php if ($search_order_by == 'p.products_id') { echo ' SELECTED'; } ?>><?php echo PWA_PRODUCT_ID; ?></option>
+            <option value="products_name"<?php if ($search_order_by == 'pd.products_name') { echo ' SELECTED'; } ?>><?php echo PWA_PRODUCT_NAME; ?></option>
           </select>
         </form>
       </td>
+</tr>
+</tbody>
+</table>
 <?php
     }
 
     ?><div id="hugo1" style="background-color: green; padding: 2px 10px;"></div>
-    <?php echo zen_draw_form('pwas-search', FILENAME_PRODUCTS_WITH_ATTRIBUTES_STOCK, 'search_order_by=' . $search_order_by, 'get', 'id="pwas-search2"', true); ?>Search:  <?php 
-    echo zen_draw_input_field('search', $seachBox, 'id="pwas-filter"', true, 'text', true);
-    echo zen_draw_input_field('pwas-search-button', 'Search', 'id="pwas-search-button"', true, 'submit', true);
+    <?php echo zen_draw_form('pwas-search', FILENAME_PRODUCTS_WITH_ATTRIBUTES_STOCK, 'search_order_by=' . $search_order_by . '&action=search-all', 'post', 'id="pwas-search2"', true);
+    echo zen_draw_label(PWA_TEXT_SEARCH, 'search', '');
+    echo zen_draw_input_field('search', $seachBox, 'id="pwas-filter"', false, 'text', true);
+    echo zen_draw_input_field('pwas-search-button', PWA_BUTTON_SEARCH, 'id="pwas-search-button"', false, 'submit', true);
     echo zen_draw_hidden_field('search_order_by', $search_order_by);
+    echo zen_draw_input_field('pwas-adjust-qty', '', 'id="pwas-adjust-qty"', false, 'text', true);
+    echo zen_draw_input_field('pwas-adjust-qty-button', PWA_BUTTON_ADJUST, 'id="adjust_quantity_button"', false, 'submit', true);
     ?></form>
     <!--<td valign="top" align="left">
       <form name="product_dropdown" action="<?php echo zen_href_link(FILENAME_PRODUCTS_WITH_ATTRIBUTES_STOCK, 'search_order_by=' . $search_order_by, 'SSL'); ?>">
         <select name="selected" onChange="go_search()">
-          <option value="products_model"<?php if ($search_order_by == 'products_model') { echo ' SELECTED'; } ?>><?php echo PWA_PRODUCT_MODEL; ?></option>
-          <option value="products_id"<?php if ($search_order_by == 'products_id') { echo ' SELECTED'; } ?>><?php echo PWA_PRODUCT_ID; ?></option>
-          <option value="products_name"<?php if ($search_order_by == 'products_name') { echo ' SELECTED'; } ?>><?php echo PWA_PRODUCT_NAME; ?></option>
+          <option value="products_model"<?php if ($search_order_by == 'p.products_model') { echo ' SELECTED'; } ?>><?php echo PWA_PRODUCT_MODEL; ?></option>
+          <option value="products_id"<?php if ($search_order_by == 'p.products_id') { echo ' SELECTED'; } ?>><?php echo PWA_PRODUCT_ID; ?></option>
+          <option value="products_name"<?php if ($search_order_by == 'pd.products_name') { echo ' SELECTED'; } ?>><?php echo PWA_PRODUCT_NAME; ?></option>
         </select>
       </form>
     </td>-->
@@ -1243,7 +1374,7 @@ If <strong>"ALL"</strong> is selected, the <?php echo PWA_SKU_TITLE; ?> will not
 
 
       /* set an option in configuration table */ ?>
-        <td colspan="2"><table>
+        <!--<td colspan="2">--><table colspan="2">
         <!-- bof: products_previous_next_display -->
   <tr>
     <td><table border="0" cellspacing="0" cellpadding="0">
@@ -1271,7 +1402,7 @@ If <strong>"ALL"</strong> is selected, the <?php echo PWA_SKU_TITLE; ?> will not
       </tr>
     </table></td>
   </tr>
-      <tr><form name="set_products_filter_id" <?php echo 'action="' . zen_href_link(FILENAME_PRODUCTS_WITH_ATTRIBUTES_STOCK, 'action=set_products_filter') . '"'; ?> method="post"><?php echo zen_draw_hidden_field('products_filter', $products_filter); ?><?php echo zen_draw_hidden_field('current_category_id', $current_category_id); ?><?php echo zen_draw_hidden_field('securityToken', $_SESSION['securityToken']); ?>
+      <tr><td><form name="set_products_filter_id" <?php echo 'action="' . zen_href_link(FILENAME_PRODUCTS_WITH_ATTRIBUTES_STOCK, 'action=set_products_filter') . '"'; ?> method="post"><?php echo zen_draw_hidden_field('products_filter', $products_filter); ?><?php echo zen_draw_hidden_field('current_category_id', $current_category_id); ?><?php echo zen_draw_hidden_field('securityToken', $_SESSION['securityToken']); ?>
 <?php if (isset($_GET['products_filter']) && $_GET['products_filter'] != '') { ?>
         <td colspan="2"><table border="0" cellspacing="0" cellpadding="2">
 <!--            <td class="attributes-even" align="center"><?php echo zen_draw_products_pull_down('products_filter', 'size="10" id="pwas-filter"', '', true, $_GET['products_filter'], true, true); ?></td>-->
@@ -1281,13 +1412,13 @@ If <strong>"ALL"</strong> is selected, the <?php echo PWA_SKU_TITLE; ?> will not
          echo zen_draw_hidden_field('search_order_by', $search_order_by);
 ?>
           </tr>
-        </table></td>
+        </table><!--</td>-->
 <?php } ?>
-      </form></tr>
+      </form></td></tr>
 
 <!-- eof: products_previous_next_display -->
 
-        </table></td>
+        </table><!--</td>-->
 
     <span id="loading" style="display: none;"><img src="./images/loading.gif" alt="" /> Loading...</span><hr />
     <a class="forward" style="float:right;" href="<?php echo zen_href_link(FILENAME_PRODUCTS_WITH_ATTRIBUTES_STOCK, "action=resync_all" . '&search_order_by=' . $search_order_by, $request_type); ?>"><strong>Sync All Quantities</strong></a><br class="clearBoth" /><hr />

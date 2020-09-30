@@ -12,6 +12,10 @@
  *
  * Stock by Attributes 1.5.4  15-11-14 mc12345678
  */
+if (!defined('PWA_DISPLAY_CUSTOMID')) {
+  define('PWA_DISPLAY_CUSTOMID', 'rightstock'); // 'leftall' (first in text), 'leftstock' (to the left of the stock quantity), 'rightstock' (default - to the right of the stock before other text), 'rightall' (furthest right item), '' (don't display customid regardless of admin setting to display)
+}
+
 class products_with_attributes_stock extends base {
 
   //
@@ -33,6 +37,8 @@ class products_with_attributes_stock extends base {
 
   private $_products_options_names_current;
   
+  private $products_options_names_fields;
+  
 //  private $_attrib_grid;
   
   private $_noread_done = false;
@@ -42,7 +48,18 @@ class products_with_attributes_stock extends base {
   private $_options_menu_images;
   
   private $_products_options_fields;
+
+  // Value of the customid to add to text, primarily for the SBA Select List (Dropdown) Basic type of dropdown
+  private $customid;
+
+  // boolean to identify whether to add the customid or not, primarily for the SBA Select List (Dropdown) Basic type of dropdown
+  private $try_customid;
   
+  private $attributeDetailsArrayforJson;
+  
+  private $data_properties;
+  
+  private $field_disabled;
   
   /*
    * This is the observer for the includes/classes/order.php file to support Stock By Attributes when the order is being processed at the end of the purchase.
@@ -61,13 +78,17 @@ class products_with_attributes_stock extends base {
     $attachNotifier[] = 'NOTIFY_ORDER_DURING_CREATE_ADDED_PRODUCT_LINE_ITEM';
     $attachNotifier[] = 'NOTIFY_ATTRIBUTES_MODULE_START_OPTION';
     $attachNotifier[] = 'NOTIFY_ATTRIBUTES_MODULE_START_OPTIONS_LOOP';
-    $attachNotifier[] = 'NOTIFY_ATTRIBUTES_MODULE_SALE_MAKER_DISPLAY_PRICE_PERCENTAGE';
+    $attachNotifier[] = 'NOTIFY_ATTRIBUTES_MODULE_SALE_MAKER_DISPLAY_PRICE_PERCENTAGE'; // Added by SBA for pre-ZC 1.5.7
+    $attachNotifier[] = 'NOTIFY_ATTRIBUTES_MODULE_SALEMAKER_DISPLAY_PRICE_PERCENTAGE';
     $attachNotifier[] = 'NOTIFY_ATTRIBUTES_MODULE_ORIGINAL_PRICE';
-    $attachNotifier[] = 'NOTIFY_ATTRIBUTES_MODULE_ATTRIB_SELECTED';
+    $attachNotifier[] = 'NOTIFY_ATTRIBUTES_MODULE_ATTRIB_SELECTED'; // Added by SBA for pre-ZC 1.5.7
+    $attachNotifier[] = 'NOTIFY_ATTRIBUTES_MODULE_RADIO_SELECTED'; // Added for ZC 1.5.7
+    $attachNotifier[] = 'NOTIFY_ATTRIBUTES_MODULE_CHECKBOX_SELECTED'; // Added for ZC 1.5.7
     $attachNotifier[] = 'NOTIFY_ATTRIBUTES_MODULE_DEFAULT_SWITCH';
     $attachNotifier[] = 'NOTIFY_ATTRIBUTES_MODULE_OPTION_BUILT';
     $attachNotifier[] = 'NOTIFY_HEADER_END_ACCOUNT_HISTORY_INFO';
     $attachNotifier[] = 'NOTIFY_HEADER_END_CHECKOUT_CONFIRMATION';
+    $attachNotifier[] = 'NOTIFY_HEADER_END_CHECKOUT_SUCCESS';
     $attachNotifier[] = 'NOTIFY_HEADER_END_SHOPPING_CART';
     $attachNotifier[] = 'NOTIFY_HEADER_START_CHECKOUT_SHIPPING';
     $attachNotifier[] = 'NOTIFY_HEADER_START_CHECKOUT_CONFIRMATION';
@@ -182,20 +203,25 @@ class products_with_attributes_stock extends base {
   }
   /*
    * NOTIFY_ATTRIBUTES_MODULE_START_OPTION
+   * Added by SBA for ZC 1.5.0 through 1.5.4.
+   * ZC 1.5.5, ZC 1.5.6,
+   * ZC 1.5.7: $zco_notifier->notify('NOTIFY_ATTRIBUTES_MODULE_START_OPTION', $products_options_names->fields);
    */
-   function updateNotifyAttributesModuleStartOption(&$callingClass, $notifier, $paramsArray) {
+   function updateNotifyAttributesModuleStartOption(&$callingClass, $notifier, $products_options_names_fields) {
      global $db, $sql, /*$options_menu_images, $moveSelectedAttribute, */
-        $products_options_array, $options_attributes_image,
-        $products_options_names, /*$products_options_names_count,*/
+        $products_options_array, /*$options_attributes_image,*/
+        /*$products_options_names, *//*$products_options_names_count,*/
        /*$stock,*/ $is_SBA_product, $order_by, $products_options; //, $pwas_class;
      
      $this->_options_menu_images = array();
      $this->_moveSelectedAttribute = false;
-     $products_options_array = array();
+     if (!isset($products_options_array)) {
+       $products_options_array = array();
+     }
 //     $options_attributes_image = array();
      // Could do the calculation here the first time set a variable above as part of the class and then reuse that... instead of the modification to the attributes file...
      if (!zen_not_null($this->_products_options_names_count)) {
-       $this->_products_options_names_count = $products_options_names->RecordCount();
+       $this->_products_options_names_count = $GLOBALS['products_options_names']->RecordCount();
      }
 //     $products_options_names_count = $products_options_names->RecordCount();
      $this->_isSBA = false;
@@ -210,6 +236,8 @@ class products_with_attributes_stock extends base {
      if (!$this->_isSBA) {
       return;
      }
+
+      $products_options_type = $products_options_names_fields['products_options_type'];
        // Want to do a SQL statement to see the quantity of non-READONLY attributes.  If there is only one non-READONLY attribute, then
        //   do additional SQL to add the "missing" attributes that would get displayed.  But, do not have the "main" sql modified otherwise
        //   the display will get all wonky (multiple listings where not desired).  Will need to modify the SQL result for each result applicable to the
@@ -217,7 +245,7 @@ class products_with_attributes_stock extends base {
        // Understand that already cycling through the product options, therefore if there are multiple options, the current option is not readonly
        //   and there is only one non-readonly attribute, then that is when the "new" sql needs to be activated to populate the current option...
        $process_this = false;
-       if (!$this->_noread_done && $products_options_names->fields['products_options_type'] != PRODUCTS_OPTIONS_TYPE_READONLY && $products_options_names->RecordCount() > 1) {
+       if (!$this->_noread_done && $products_options_type != PRODUCTS_OPTIONS_TYPE_READONLY && $this->_products_options_names_count > 1) {
          $sql_noread = "SELECT count(distinct products_options_id) AS total
            FROM " . TABLE_PRODUCTS_OPTIONS . " popt, " . TABLE_PRODUCTS_ATTRIBUTES . " patrib where patrib.products_id = :products_id:
            AND patrib.options_id = popt.products_options_id
@@ -252,8 +280,8 @@ class products_with_attributes_stock extends base {
                 )
                 && defined('SBA_SHOW_OUT_OF_STOCK_ATTR_ON_PRODUCT_INFO') && SBA_SHOW_OUT_OF_STOCK_ATTR_ON_PRODUCT_INFO == '0'
                 && (!defined('PRODINFO_ATTRIBUTE_DYNAMIC_STATUS') || (PRODINFO_ATTRIBUTE_DYNAMIC_STATUS != '1' && PRODINFO_ATTRIBUTE_DYNAMIC_STATUS != '3'))
-                && (!defined('PRODUCTS_OPTIONS_TYPE_GRID') || $products_options_names->fields['products_options_type'] != PRODUCTS_OPTIONS_TYPE_GRID)
-                && (!defined('PRODUCTS_OPTIONS_TYPE_ATTRIBUTE_GRID') || $products_options_names->fields['products_options_type'] != PRODUCTS_OPTIONS_TYPE_ATTRIBUTE_GRID)
+                && (!defined('PRODUCTS_OPTIONS_TYPE_GRID') || $products_options_type != PRODUCTS_OPTIONS_TYPE_GRID)
+                && (!defined('PRODUCTS_OPTIONS_TYPE_ATTRIBUTE_GRID') || $products_options_type != PRODUCTS_OPTIONS_TYPE_ATTRIBUTE_GRID)
               ) 
                ? " AND (pas.quantity > '0' OR (pas.quantity IS NULL AND pa.attributes_display_only = '1')) "
                : ""
@@ -262,7 +290,7 @@ class products_with_attributes_stock extends base {
             $order_by;
               
        $sql = $db->bindVars($sql, ':products_id:', $_GET['products_id'], 'integer');
-       $sql = $db->bindVars($sql, ':options_id:', $products_options_names->fields['products_options_id'], 'integer');
+       $sql = $db->bindVars($sql, ':options_id:', $products_options_names_fields['products_options_id'], 'integer');
        $sql = $db->bindVars($sql, ':languages_id:', $_SESSION['languages_id'], 'integer');
 
        $products_options = $db->Execute($sql);
@@ -270,14 +298,58 @@ class products_with_attributes_stock extends base {
 
   /*
    * 'NOTIFY_ATTRIBUTES_MODULE_START_OPTIONS_LOOP'
+   * Added by SBA for ZC 1.5.0 through 1.5.4.
+   * ZC 1.5.5 &
+   * ZC 1.5.6: $zco_notifier->notify('NOTIFY_ATTRIBUTES_MODULE_START_OPTIONS_LOOP', $i++, $products_options->fields);
+   * ZC 1.5.7: $zco_notifier->notify('NOTIFY_ATTRIBUTES_MODULE_START_OPTIONS_LOOP', $i++, $products_options->fields, $products_options_names->fields, $data_properties, $field_disabled, $attributeDetailsArrayForJson);
    */
-  function updateNotifyAttributesModuleStartOptionsLoop(&$callingClass, $notifier, $i, &$products_options_fields){
-    global $db, /*$options_menu_images, */$products_options_array, $products_options_names,
+  function updateNotifyAttributesModuleStartOptionsLoop(&$callingClass, $notifier, $i, &$products_options_fields, &$products_options_names_fields, &$data_properties, &$field_disabled, &$attributeDetailsArrayforJson){
+    global $db, /*$options_menu_images, */$products_options_array, /*$products_options_names,*/
            $PWA_STOCK_QTY;
+    if (is_null($products_options_names_fields)) {
+      $products_options_names_fields = $GLOBALS['products_options_names']->fields;
+    }
+
+    if (is_null($field_disabled)) {
+      global $disablebackorder;
+      $disablebackorder = '';
+    }
 
     $this->_products_options_names_current++;
     
-    if ($this->_isSBA && (in_array($products_options_names->fields['products_options_type'], array(PRODUCTS_OPTIONS_TYPE_SELECT_SBA, PRODUCTS_OPTIONS_TYPE_RADIO, PRODUCTS_OPTIONS_TYPE_CHECKBOX, PRODUCTS_OPTIONS_TYPE_FILE, PRODUCTS_OPTIONS_TYPE_TEXT, PRODUCTS_OPTIONS_TYPE_SELECT)) || ((PRODINFO_ATTRIBUTE_DYNAMIC_STATUS == '0' && $products_options_names->fields['products_options_type'] == PRODUCTS_OPTIONS_TYPE_SELECT_SBA) || PRODINFO_ATTRIBUTE_DYNAMIC_STATUS == '1' || (PRODINFO_ATTRIBUTE_DYNAMIC_STATUS == '2' && $products_options_names->RecordCount() > 1) || (PRODINFO_ATTRIBUTE_DYNAMIC_STATUS == '3' && $products_options_names->RecordCount() == 1)))) {  // Perhaps only certain features need to be bypassed, but for now all mc12345678
+    $this->attributeDetailsArrayforJson = $attributeDetailsArrayforJson;
+    
+    $type_array = array(
+      PRODUCTS_OPTIONS_TYPE_SELECT_SBA,
+      PRODUCTS_OPTIONS_TYPE_RADIO,
+      PRODUCTS_OPTIONS_TYPE_CHECKBOX,
+      PRODUCTS_OPTIONS_TYPE_FILE,
+      PRODUCTS_OPTIONS_TYPE_TEXT,
+      PRODUCTS_OPTIONS_TYPE_SELECT,
+    );
+
+    $products_options_type = $products_options_names_fields['products_options_type'];
+
+    $this->for_attributes =  (
+      in_array($products_options_type, $type_array)
+      || (
+        (
+          PRODINFO_ATTRIBUTE_DYNAMIC_STATUS == '0'
+          && $products_options_type == PRODUCTS_OPTIONS_TYPE_SELECT_SBA
+        )
+        || PRODINFO_ATTRIBUTE_DYNAMIC_STATUS == '1'
+        || (
+          PRODINFO_ATTRIBUTE_DYNAMIC_STATUS == '2'
+          && $this->_products_options_names_count > 1
+        )
+        || (
+          PRODINFO_ATTRIBUTE_DYNAMIC_STATUS == '3'
+          && $this->_products_options_names_count == 1
+        )
+      )
+    );
+
+    if ($this->_isSBA && $this->for_attributes) {  // Perhaps only certain features need to be bypassed, but for now all mc12345678
       // START "Stock by Attributes"  SBA
       //used to find if an attribute is display-only
       $sqlDO = "select pa.attributes_display_only
@@ -291,27 +363,37 @@ class products_with_attributes_stock extends base {
 
       //echo 'ID: ' . $products_options_fields["products_attributes_id"] . ' Stock ID: ' . $products_options_fields['pasid'] . ' QTY: ' . $products_options_fields['pasqty'] . ' Custom ID: ' . $products_options_fields['customid'] . '<br />';//debug line
       //add out of stock text based on qty
-      if ((!isset($products_options_fields['pasqty']) || $products_options_fields['pasqty'] < 1) && STOCK_CHECK == 'true' && isset($products_options_fields['pasid']) && $products_options_fields['pasid'] > 0) {
+      if ((!isset($products_options_fields['pasqty']) || $products_options_fields['pasqty'] <= 0) && STOCK_CHECK == 'true' && isset($products_options_fields['pasid']) && $products_options_fields['pasid'] > 0) {
         //test, only applicable to products with-out the display-only attribute set
         if (empty($products_options_DISPLAYONLY->fields['attributes_display_only'])) {
           $products_options_fields['products_options_values_name'] = $products_options_fields['products_options_values_name'] . PWA_OUT_OF_STOCK;
           // $i in includes/modules/YOUR_TEMPLATE/attributes.php is post incremented ($i++) meaning it is sent here with the 
           //   current value, but upon return will be incremented by 1.  Therefore within this function it should be considered as 
           //   the value that attributes.php was seeing just before the notifier.
-          $products_options_array[$i] = array_merge($products_options_array[$i], array('id' =>
-              $products_options_fields['products_options_values_id'],
-              'text' => $products_options_fields['products_options_values_name'])); // 2017-07-13 mc12345678 added array_merge to preserve other modifications that may have been made for this array instead of replacing them in their entirety and possibly losing the other data.
+          $products_options_array[$i] = array_merge(
+            $products_options_array[$i],
+            array(
+              'id' => $products_options_fields['products_options_values_id'],
+              'text' => $products_options_fields['products_options_values_name'],
+            )
+          ); // 2017-07-13 mc12345678 added array_merge to preserve other modifications that may have been made for this array instead of replacing them in their entirety and possibly losing the other data.
         }
       }
 
       $show_custom_id_flag = isset($products_options_fields['customid'])
-          && zen_not_null($products_options_fields['customid'])
-          && (
-              !defined('ATTRIBUTES_SBA_DISPLAY_CUSTOMID')
-              || (STOCK_SBA_DISPLAY_CUSTOMID == 'true' && ATTRIBUTES_SBA_DISPLAY_CUSTOMID == '1')
-              || ATTRIBUTES_SBA_DISPLAY_CUSTOMID == '2'
-              || (ATTRIBUTES_SBA_DISPLAY_CUSTOMID == '3' && $products_options_names->RecordCount() > 1)
-             );
+        && zen_not_null($products_options_fields['customid'])
+        && (
+          !defined('ATTRIBUTES_SBA_DISPLAY_CUSTOMID')
+          || (
+            STOCK_SBA_DISPLAY_CUSTOMID == 'true'
+            && ATTRIBUTES_SBA_DISPLAY_CUSTOMID == '1'
+          )
+          || ATTRIBUTES_SBA_DISPLAY_CUSTOMID == '2'
+          || (
+            ATTRIBUTES_SBA_DISPLAY_CUSTOMID == '3'
+            && $products_options_names_count > 1
+          )
+        );
       //Add qty to atributes based on STOCK_SHOW_ATTRIB_LEVEL_STOCK setting
       //Only add to Radio, Checkbox, and selection lists
       //PRODUCTS_OPTIONS_TYPE_RADIO PRODUCTS_OPTIONS_TYPE_CHECKBOX
@@ -319,21 +401,24 @@ class products_with_attributes_stock extends base {
       //PRODUCTS_OPTIONS_TYPE_TEXT PRODUCTS_OPTIONS_TYPE_FILE PRODUCTS_OPTIONS_TYPE_READONLY
       //PRODUCTS_OPTIONS_TYPE_SELECT_SBA
       $PWA_STOCK_QTY = ''; //initialize variable
-      if ($products_options_names->fields['products_options_type'] != PRODUCTS_OPTIONS_TYPE_TEXT) {
-        if ($products_options_names->fields['products_options_type'] != PRODUCTS_OPTIONS_TYPE_FILE) {
-          if ($products_options_names->fields['products_options_type'] != PRODUCTS_OPTIONS_TYPE_READONLY) {
-            /*if ($products_options_names->fields['products_options_type'] == PRODUCTS_OPTIONS_TYPE_SELECT_SBA)*/ {
+      $this->customid = '';
+      $this->try_customid = false;
+      if ($products_options_type != PRODUCTS_OPTIONS_TYPE_TEXT) {
+        if ($products_options_type != PRODUCTS_OPTIONS_TYPE_FILE) {
+          if ($products_options_type != PRODUCTS_OPTIONS_TYPE_READONLY) {
+            /*if ($products_options_type == PRODUCTS_OPTIONS_TYPE_SELECT_SBA)*/ {
 
               if (STOCK_SHOW_ATTRIB_LEVEL_STOCK == 'true' && isset($products_options_fields['pasqty']) && $products_options_fields['pasqty'] > 0) {
                 //test, only applicable to products with-out the display-only attribute set
                 if (empty($products_options_DISPLAYONLY->fields['attributes_display_only'])) {
                   $PWA_STOCK_QTY = PWA_STOCK_QTY . $products_options_fields['pasqty'] . ' ';
                   //show custom ID if flag set to true
-                  if ($show_custom_id_flag) {
-                    $PWA_STOCK_QTY .= ' (' . $products_options_fields['customid'] . ') ';
+                  if ($show_custom_id_flag && zen_not_null($products_options_fields['customid'])) {
+                    $this->customid = PWA_CUSTOMID_LEFT . $products_options_fields['customid'] . PWA_CUSTOMID_RIGHT;
+                    $this->try_customid = true;
                   }
                 }
-              } elseif (STOCK_SHOW_ATTRIB_LEVEL_STOCK == 'true' && (!isset($products_options_fields['pasqty']) || ($products_options_fields['pasqty'] < 1)) && empty($products_options_fields['pasid'])) {
+              } elseif (STOCK_SHOW_ATTRIB_LEVEL_STOCK == 'true' && (!isset($products_options_fields['pasqty']) || ($products_options_fields['pasqty'] <= 0)) && empty($products_options_fields['pasid'])) {
                 //test, only applicable to products with-out the display-only attribute set
                 if (empty($products_options_DISPLAYONLY->fields['attributes_display_only'])) {
                   //use the qty from the product, unless it is 0, then set to out of stock.
@@ -342,30 +427,51 @@ class products_with_attributes_stock extends base {
                       $PWA_STOCK_QTY = PWA_STOCK_QTY . $products_options_fields['products_quantity'] . ' ';
                     } else {
                       $products_options_fields['products_options_values_name'] = $products_options_fields['products_options_values_name'] . PWA_OUT_OF_STOCK;
-                      $products_options_array[$i] = array_merge($products_options_array[$i], array('id' =>
+                      $products_options_array[$i] = array_merge(
+                        $products_options_array[$i],
+                        array(
+                          'id' =>$products_options_fields['products_options_values_id'],
 /*                      $products_options_array[count($products_options_array)-1] = array('id' =>*/
-                          $products_options_fields['products_options_values_id'],
-                          'text' => $products_options_fields['products_options_values_name'])
-                          );
+                          'text' => $products_options_fields['products_options_values_name'],
+                        )
+                      );
 
                     }
                   }
 
                   //show custom ID if flag set to true
-                  if ($show_custom_id_flag) {
-                    $PWA_STOCK_QTY .= ' (' . $products_options_fields['customid'] . ') ';
+                  if ($show_custom_id_flag && zen_not_null($products_options_fields['customid'])) {
+                    $this->customid = PWA_CUSTOMID_LEFT . $products_options_fields['customid'] . PWA_CUSTOMID_RIGHT;
+                    $this->try_customid = true;
                   }
                 }
               } elseif ($show_custom_id_flag) {
                 //show custom ID if flag set to true
                 //test, only applicable to products with-out the display-only attribute set
                 if ($products_options_DISPLAYONLY->fields['attributes_display_only'] < 1) {
-                  $PWA_STOCK_QTY .= ' (' . $products_options_fields['customid'] . ') ';
+                  $this->customid = PWA_CUSTOMID_LEFT . $products_options_fields['customid'] . PWA_CUSTOMID_RIGHT;
+                  $this->try_customid = true;
                 }
               }
             }
           }
         }
+      }
+
+      if ($this->try_customid) {
+        if (PWA_DISPLAY_CUSTOMID == 'rightstock') {
+          $PWA_STOCK_QTY .= $this->customid;
+        } else if (PWA_DISPLAY_CUSTOMID == 'leftstock') {
+          // Add customid to beginning of option value's above stock text.
+          $PWA_STOCK_QTY = $this->customid . $PWA_STOCK_QTY;
+        }
+      }
+
+      // Add the stock quantity text to the end of the existing products_options text.
+      $products_options_array[$i]['text'] .= $PWA_STOCK_QTY;
+      if ($this->try_customid && PWA_DISPLAY_CUSTOMID == 'leftall') {
+        // Add customid to beginning of option value's text.
+        $products_options_array[$i]['text'] = $this->customid . $products_options_array[$i]['text'];
       }
 
       //create image array for use in select list to rotate visable image on select.  Applicable only to
@@ -391,7 +497,57 @@ class products_with_attributes_stock extends base {
     } // End if _isSBA
 
     $this->_products_options_fields = $products_options_fields;
-
+    $this->products_options_names_fields = $products_options_names_fields;
+    $this->data_properties = $data_properties;
+    
+    if ($this->_isSBA
+      && !(
+        (
+          PRODINFO_ATTRIBUTE_DYNAMIC_STATUS == '0'
+          && (
+            $products_options_type != PRODUCTS_OPTIONS_TYPE_SELECT_SBA
+            && $products_options_type != PRODUCTS_OPTIONS_TYPE_RADIO
+          )
+        )
+        || (
+          PRODINFO_ATTRIBUTE_DYNAMIC_STATUS == '2'
+          && $this->_products_options_names_count == 1
+          && (
+            $products_options_type != PRODUCTS_OPTIONS_TYPE_SELECT_SBA
+            && $products_options_type != PRODUCTS_OPTIONS_TYPE_RADIO
+          )
+        )
+        || (
+          PRODINFO_ATTRIBUTE_DYNAMIC_STATUS == '3'
+          && $this->_products_options_names_count > 1
+        )
+      )
+    ) {
+      //disable radio buttons and sba select
+      if (
+        (
+          STOCK_ALLOW_CHECKOUT == 'false'
+          && (
+            empty($products_options_fields['pasqty'])
+            || $products_options_fields['pasqty'] <= 0
+          )
+          && !empty($products_options_fields['pasid'])
+        )
+        || (
+          STOCK_ALLOW_CHECKOUT == 'false'
+          && (
+            empty($products_options_fields['products_quantity'])
+            || $products_options_fields['products_quantity'] <= 0
+          )
+          && empty($products_options_fields['pasid'])
+        )
+      ) { //|| $products_options_READONLY->fields['attributes_display_only'] == 1
+        $field_disabled = $disablebackorder = ' disabled="disabled" ';
+      }
+    }
+    
+    $this->field_disabled = $field_disabled;
+    
     if ($this->_products_options_names_current == 1) {
       // global $currencies;
 
@@ -401,71 +557,135 @@ class products_with_attributes_stock extends base {
 
   /*
    * NOTIFY_ATTRIBUTES_MODULE_SALE_MAKER_DISPLAY_PRICE_PERCENTAGE
+   * ZC 1.5.x:  $zco_notifier->notify('NOTIFY_ATTRIBUTES_MODULE_SALE_MAKER_DISPLAY_PRICE_PERCENTAGE');
+   * ZC 1.5.7:  $zco_notifier->notify('NOTIFY_ATTRIBUTES_MODULE_SALEMAKER_DISPLAY_PRICE_PERCENTAGE', $products_options->fields, $product_info->fields, $products_options_display_price, $data_properties);
    */
-  function updateNotifyAttributesModuleSaleMakerDisplayPricePercentage(&$callingClass, $notifier, $paramsArray){
-    global $products_options_names, $products_options_display_price, $products_options, $currencies, $new_attributes_price, $product_info;
+  function updateNotifyAttributesModuleSaleMakerDisplayPricePercentage(&$callingClass, $notifier, $products_options_fields, &$product_info_fields, &$products_options_display_price, &$data_properties){
+    // attribute types to which this applies
+    $group_price_modified = array(
+      PRODUCTS_OPTIONS_TYPE_RADIO,
+      PRODUCTS_OPTIONS_TYPE_CHECKBOX,
+    );
     
-    if ($products_options_names->fields['products_options_type'] == PRODUCTS_OPTIONS_TYPE_RADIO || $products_options_names->fields['products_options_type'] == PRODUCTS_OPTIONS_TYPE_CHECKBOX) {
-      //use this if a PRODUCTS_OPTIONS_TYPE_RADIO or PRODUCTS_OPTIONS_TYPE_CHECKBOX
-      //class="productSpecialPrice" can be used in a CSS file to control the text properties, not compatable with selection lists
-      $products_options_display_price = ATTRIBUTES_PRICE_DELIMITER_PREFIX . '<span class="productSpecialPrice">' . $products_options->fields['price_prefix'] . $currencies->display_price($new_attributes_price, zen_get_tax_rate($product_info->fields['products_tax_class_id'])) . '</span>' . ATTRIBUTES_PRICE_DELIMITER_SUFFIX;
+    // Perform an early escape if there is nothing to be done here.
+    if (!in_array($this->products_options_names_fields['products_options_type'], $group_price_modified)) {
+      return;
     }
+
+    global $currencies;
+    
+    // Backwards compatibility with attributes.php file
+    if (is_null($products_options_display_price)) {
+      global $products_options_display_price;
+    }
+    
+    // Backwards compatibility with attributes.php file
+    if (empty($products_options_fields)) {
+      $products_options_fields = $GLOBALS['products_options']->fields;
+    }
+    
+    // Backwards compatibility with attributes.php file
+    if (is_null($product_info_fields)) {
+      $product_info_fields = $GLOBALS['product_info']->fields;
+    }
+    
+    //use this if a PRODUCTS_OPTIONS_TYPE_RADIO or PRODUCTS_OPTIONS_TYPE_CHECKBOX
+    //class="productSpecialPrice" can be used in a CSS file to control the text properties, not compatable with selection lists
+    $products_options_display_price = ATTRIBUTES_PRICE_DELIMITER_PREFIX . '<span class="productSpecialPrice">' . $products_options_fields['price_prefix'] . $currencies->display_price($GLOBALS['new_attributes_price'], zen_get_tax_rate($product_info_fields['products_tax_class_id'])) . '</span>' . ATTRIBUTES_PRICE_DELIMITER_SUFFIX;
 
   }
 
    /*
     * NOTIFY_ATTRIBUTES_MODULE_ORIGINAL_PRICE
+    * SBA added: $zco_notifier->notify('NOTIFY_ATTRIBUTES_MODULE_ORIGINAL_PRICE');
+    * As of ZC 1.5.7:
+    * $zco_notifier->notify('NOTIFY_ATTRIBUTES_MODULE_ORIGINAL_PRICE', $products_options->fields, $products_options_array, $products_options_display_price, $data_properties);
     */
-  function updateNotifyAttributesModuleOriginalPrice(&$callingClass, $notifier, $paramsArray){
-    global /*$db, */$products_options, $products_options_names, $currencies, $new_attributes_price, $product_info, $products_options_display_price, $PWA_STOCK_QTY;
-    
+  function updateNotifyAttributesModuleOriginalPrice(&$callingClass, $notifier, $products_options_fields, &$products_options_array, &$products_options_display_price, &$data_properties) {
+
     // If not even an SBA selection, then don't do anything with it.
     if (!$this->_isSBA) {
       return;
     }
-    
-    if (
-          (
-            in_array($products_options_names->fields['products_options_type'], array(PRODUCTS_OPTIONS_TYPE_SELECT_SBA, PRODUCTS_OPTIONS_TYPE_RADIO, PRODUCTS_OPTIONS_TYPE_CHECKBOX, PRODUCTS_OPTIONS_TYPE_FILE, PRODUCTS_OPTIONS_TYPE_TEXT, PRODUCTS_OPTIONS_TYPE_SELECT)) 
-            || (
-                (PRODINFO_ATTRIBUTE_DYNAMIC_STATUS == '0' 
-                  && $products_options_names->fields['products_options_type'] == PRODUCTS_OPTIONS_TYPE_SELECT_SBA
-                ) 
-                || PRODINFO_ATTRIBUTE_DYNAMIC_STATUS == '1' 
-                || (PRODINFO_ATTRIBUTE_DYNAMIC_STATUS == '2' && $products_options_names->RecordCount() > 1) 
-                || (PRODINFO_ATTRIBUTE_DYNAMIC_STATUS == '3' && $products_options_names->RecordCount() == 1)
-               )
-            )
-        ) {  // Perhaps only certain features need to be bypassed, but for now all mc12345678
-      // START "Stock by Attributes" SBA added original price for display, and some formatting
-      $originalpricedisplaytext = null;
-      $attributes_price_final = zen_get_attributes_price_final($products_options->fields["products_attributes_id"], 1, '', 'false');
-//      if (STOCK_SHOW_ORIGINAL_PRICE_STRUCK == 'true' && !($attributes_price_final == $new_attributes_price || ($attributes_price_final == -$new_attributes_price && ((int)($products_options->fields['price_prefix'] . "1") * $products_options->fields['options_values_price']) < 0)) ) {
-      if (STOCK_SHOW_ORIGINAL_PRICE_STRUCK == 'true' && !($products_options->fields['attributes_display_only'] && $products_options->fields['attributes_default'] && !$products_options->fields['products_options_sort_order']) && ($attributes_price_final == $new_attributes_price || (($attributes_price_final == -$new_attributes_price) && ((int)($products_options->fields['price_prefix'] . "1") * $products_options->fields['options_values_price']) < 0)) ) {
-        //Original price struck through
-        if ($products_options_names->fields['products_options_type'] == PRODUCTS_OPTIONS_TYPE_RADIO || $products_options_names->fields['products_options_type'] == PRODUCTS_OPTIONS_TYPE_CHECKBOX) {
-          //use this if a PRODUCTS_OPTIONS_TYPE_RADIO or PRODUCTS_OPTIONS_TYPE_CHECKBOX
-          //class="normalprice" can be used in a CSS file to control the text properties, not compatable with selection lists
-          $originalpricedisplaytext = ATTRIBUTES_PRICE_DELIMITER_PREFIX . '<span class="normalprice">' . $products_options->fields['price_prefix'] . $currencies->display_price($products_options->fields['options_values_price'], zen_get_tax_rate($product_info->fields['products_tax_class_id'])) . '</span>' . ATTRIBUTES_PRICE_DELIMITER_SUFFIX;
-        } else {
-          //need to remove the <span> tag for selection lists and text boxes
-          $originalpricedisplaytext = ATTRIBUTES_PRICE_DELIMITER_PREFIX . $products_options->fields['price_prefix'] . $currencies->display_price(abs($products_options->fields['options_values_price']), zen_get_tax_rate($product_info->fields['products_tax_class_id'])) . ATTRIBUTES_PRICE_DELIMITER_SUFFIX;
-        }
-      }
 
-      $products_options_display_price .= $originalpricedisplaytext . $PWA_STOCK_QTY;
-      // END "Stock by Attributes" SBA
+    if (!$this->for_attributes) {
+      return;
     }
+
+    global /*$db, $products_options, $products_options_names,*/ $currencies, $new_attributes_price, $product_info, $PWA_STOCK_QTY;
+    if (is_null($products_options_display_price)) {
+      global $products_options_display_price;
+    }
+    if (empty($products_options_fields)) {
+      $products_options_fields = $GLOBALS['products_options']->fields;
+      $products_options_array = null; // @TODO: Set this properly for further use if needed.  Not needed in this section for time being.
+    }
+    
+    
+    // attribute types to which this applies
+    $group_price_modified = array(
+      PRODUCTS_OPTIONS_TYPE_RADIO,
+      PRODUCTS_OPTIONS_TYPE_CHECKBOX,
+    );
+    
+    $products_options_type = 0;
+    
+    if (isset($GLOBALS['inputFieldId']) && isset($this->attributeDetailsArrayForJson[$GLOBALS['inputFieldId']]['products_options_type'])) {
+      $products_options_type = $this->attributeDetailsArrayForJson[$GLOBALS['inputFieldId']]['products_options_type'];
+    }
+    
+    if (empty($this->attributeDetailsArrayForJson)) {
+      $products_options_type = $this->products_options_names_fields['products_options_type'];
+    }
+    
+    
+    // Perhaps only certain features need to be bypassed, but for now all mc12345678
+    // START "Stock by Attributes" SBA added original price for display, and some formatting
+    $originalpricedisplaytext = '';
+
+    if (!empty($_SESSION['pwas_class2']->zgapf)) {
+        // Use the latest function for determining the attribute's final price
+        //   This requires/uses 4 parameters to internally determine the price of the attribute
+      global $products_price_is_priced_by_attributes;
+      $attributes_price_final = zen_get_attributes_price_final($products_options_fields['products_attributes_id'], 1, '', 'false', $products_price_is_priced_by_attributes);
+    } else {
+        // This is the old method of performing attribute price determination which
+        //   has been found to be prone to discrepancies when sales, specials 
+        //   and/or priced-by-attributes are involved
+      $attributes_price_final = zen_get_attributes_price_final($products_options_fields['products_attributes_id'], 1, '', 'false');
+      $attributes_price_final = zen_get_discount_calc((int)$_GET['products_id'], true, $attributes_price_final);
+    }
+//      if (STOCK_SHOW_ORIGINAL_PRICE_STRUCK == 'true' && !($attributes_price_final == $new_attributes_price || ($attributes_price_final == -$new_attributes_price && ((int)($products_options->fields['price_prefix'] . "1") * $products_options->fields['options_values_price']) < 0)) ) {
+    if (STOCK_SHOW_ORIGINAL_PRICE_STRUCK == 'true' && !($products_options_fields['attributes_display_only'] && $products_options_fields['attributes_default'] && !$products_options_fields['products_options_sort_order']) && ($new_attributes_price != $products_options_fields['options_values_price']) && (($attributes_price_final == $new_attributes_price) || (($attributes_price_final == -$new_attributes_price) && ((int)($products_options_fields['price_prefix'] . "1") * $products_options_fields['options_values_price']) < 0)) ) {
+      //Original price struck through
+      if (in_array($products_options_type, $group_price_modified)) {
+        //use this if a PRODUCTS_OPTIONS_TYPE_RADIO or PRODUCTS_OPTIONS_TYPE_CHECKBOX
+        //class="normalprice" can be used in a CSS file to control the text properties, not compatable with selection lists
+//        $originalpricedisplaytext = ATTRIBUTES_PRICE_DELIMITER_PREFIX . '<span class="normalprice">' . $products_options_fields['price_prefix'] . $currencies->display_price($attributes_price_final, zen_get_tax_rate($product_info->fields['products_tax_class_id'])) . '</span>' . ATTRIBUTES_PRICE_DELIMITER_SUFFIX;
+        $originalpricedisplaytext = ATTRIBUTES_PRICE_DELIMITER_PREFIX . '<span class="normalprice">' . $products_options_fields['price_prefix'] . $currencies->display_price($products_options_fields['options_values_price'], zen_get_tax_rate($product_info->fields['products_tax_class_id'])) . '</span>' . ATTRIBUTES_PRICE_DELIMITER_SUFFIX;
+      } else {
+        //need to remove the <span> tag for selection lists and text boxes
+//        $originalpricedisplaytext = ATTRIBUTES_PRICE_DELIMITER_PREFIX . $products_options_fields['price_prefix'] . $currencies->display_price(abs($attributes_price_final), zen_get_tax_rate($product_info->fields['products_tax_class_id'])) . ATTRIBUTES_PRICE_DELIMITER_SUFFIX;
+        $originalpricedisplaytext = ATTRIBUTES_PRICE_DELIMITER_PREFIX . $products_options_fields['price_prefix'] . $currencies->display_price(abs($products_options_fields['options_values_price']), zen_get_tax_rate($product_info->fields['products_tax_class_id'])) . ATTRIBUTES_PRICE_DELIMITER_SUFFIX;
+      }
+    }
+
+    if ($this->try_customid && PWA_DISPLAY_CUSTOMID == 'rightall') {
+      $products_options_display_price .= $originalpricedisplaytext . $this->customid;
+    }
+    // END "Stock by Attributes" SBA
   }
   
    /*
     * NOTIFY_ATTRIBUTES_MODULE_ATTRIB_SELECTED
+    * ZC 1.5.x: $zco_notifier->notify('NOTIFY_ATTRIBUTES_MODULE_ATTRIB_SELECTED');
+    * ZC 1.5.7: Called something else, one for radio, one for checkboxes
+    * Disable code has been moved up in processing
     */
   function updateNotifyAttributesModuleAttribSelected(&$callingClass, $notifier, $paramsArray){
-    global $products_options_names, $products_options, $selected_attribute, /*$moveSelectedAttribute,*/ $disablebackorder;
+    global /*$products_options_names, */$products_options, $selected_attribute/*, $moveSelectedAttribute,*//* $disablebackorder*/;
     
 //       if ($this->_isSBA && (PRODINFO_ATTRIBUTE_DYNAMIC_STATUS == '1' || (PRODINFO_ATTRIBUTE_DYNAMIC_STATUS == '2' && $products_options_names->RecordCount() > 1) || (PRODINFO_ATTRIBUTE_DYNAMIC_STATUS == '3' && $products_options_names->RecordCount() == 1))) {  // Perhaps only certain features need to be bypassed, but for now all mc12345678
-    $disablebackorder = null;
     if (!$this->_isSBA || (PRODINFO_ATTRIBUTE_DYNAMIC_STATUS == '0' && $this->products_options_names_fields['products_options_type'] != PRODUCTS_OPTIONS_TYPE_SELECT_SBA) || (PRODINFO_ATTRIBUTE_DYNAMIC_STATUS == '2' && $this->_products_options_names_count == 1 && $this->products_options_names_fields['products_options_type'] != PRODUCTS_OPTIONS_TYPE_SELECT_SBA) || (PRODINFO_ATTRIBUTE_DYNAMIC_STATUS == '3' && $this->_products_options_names_count > 1)) {
       return;
     }
@@ -484,11 +704,73 @@ class products_with_attributes_stock extends base {
         $selected_attribute = false;
         $this->_moveSelectedAttribute = true;
       }
-      $disablebackorder = ' disabled="disabled" ';
     }
     // END "Stock by Attributes" SBA
      
   }
+
+  /**
+   *  ZC 1.5.7:
+   *  $zco_notifier->notify('NOTIFY_ATTRIBUTES_MODULE_RADIO_SELECTED', $products_options->fields, $data_properties);
+   *
+   **/
+  function updateNotifyAttributesModuleRadioSelected(&$callingClass, $notifier, $products_options_fields, &$data_properties) {
+    global /*$products_options_names, $products_options, */$selected_attribute/*, $moveSelectedAttribute,*//* $disablebackorder, $field_disabled*/;
+    
+    if (!$this->_isSBA || (PRODINFO_ATTRIBUTE_DYNAMIC_STATUS == '0' && $this->products_options_names_fields['products_options_type'] != PRODUCTS_OPTIONS_TYPE_SELECT_SBA) || (PRODINFO_ATTRIBUTE_DYNAMIC_STATUS == '2' && $this->_products_options_names_count == 1 && $this->products_options_names_fields['products_options_type'] != PRODUCTS_OPTIONS_TYPE_SELECT_SBA) || (PRODINFO_ATTRIBUTE_DYNAMIC_STATUS == '3' && $this->_products_options_names_count > 1)) {
+      return;
+    }
+
+    //move default selected attribute if attribute is out of stock and check out is not allowed
+    if ($this->_moveSelectedAttribute == true && (STOCK_ALLOW_CHECKOUT == 'false' && $products_options_fields['pasqty'] > 0)) {
+      $selected_attribute = true;
+      $this->_moveSelectedAttribute = false;
+    }
+    //disable radio and disable default selected
+    if (STOCK_ALLOW_CHECKOUT == 'false' && ( ((empty($products_options_fields['pasqty']) || $products_options_fields['pasqty'] <= 0) && !empty($products_options_fields['pasid']) )
+    || ((empty($products_options_fields['products_quantity']) || $products_options_fields['products_quantity'] <= 0) && empty($products_options_fields['pasid'])) )
+    ) {//|| $products_options_READONLY->fields['attributes_display_only'] == 1
+      if ($selected_attribute == true) {
+        $selected_attribute = false;
+        $this->_moveSelectedAttribute = true;
+      }
+    }
+    // END "Stock by Attributes" SBA
+     
+  }
+
+
+  /**
+   *
+   * $zco_notifier->notify('NOTIFY_ATTRIBUTES_MODULE_CHECKBOX_SELECTED', $products_options->fields, $data_properties);
+   **/
+  function updateNotifyAttributesModuleCheckboxSelected(&$callingClass, $notifier, $products_options_fields, &$data_properties) {
+    
+//       if ($this->_isSBA && (PRODINFO_ATTRIBUTE_DYNAMIC_STATUS == '1' || (PRODINFO_ATTRIBUTE_DYNAMIC_STATUS == '2' && $products_options_names->RecordCount() > 1) || (PRODINFO_ATTRIBUTE_DYNAMIC_STATUS == '3' && $products_options_names->RecordCount() == 1))) {  // Perhaps only certain features need to be bypassed, but for now all mc12345678
+    if (!$this->_isSBA || (PRODINFO_ATTRIBUTE_DYNAMIC_STATUS == '0' && $this->products_options_names_fields['products_options_type'] != PRODUCTS_OPTIONS_TYPE_SELECT_SBA) || (PRODINFO_ATTRIBUTE_DYNAMIC_STATUS == '2' && $this->_products_options_names_count/*$products_options_names->RecordCount()*/ == 1 && $this->products_options_names_fields['products_options_type'] != PRODUCTS_OPTIONS_TYPE_SELECT_SBA) || (PRODINFO_ATTRIBUTE_DYNAMIC_STATUS == '3' && $this->_products_options_names_count/*$products_options_names->RecordCount()*/ > 1)) {
+      return;
+    }
+    global $selected_attribute;
+    
+    //move default selected attribute if attribute is out of stock and check out is not allowed
+    if ($this->_moveSelectedAttribute == true && (STOCK_ALLOW_CHECKOUT == 'false' && $products_options_fields['pasqty'] > 0)) {
+      $selected_attribute = true;
+      $this->_moveSelectedAttribute = false;
+    }
+
+    //disable radio and disable default selected
+    if ((STOCK_ALLOW_CHECKOUT == 'false' && (empty($products_options_fields['pasqty']) || $products_options_fields['pasqty'] <= 0) && !empty($products_options_fields['pasid']) )
+    || ( STOCK_ALLOW_CHECKOUT == 'false' && (empty($products_options_fields['products_quantity']) || $products_options_fields['products_quantity'] <= 0) && empty($products_options_fields['pasid']) )
+    ) {//|| $products_options_READONLY->fields['attributes_display_only'] == 1
+      if ($selected_attribute == true) {
+        $selected_attribute = false;
+        $this->_moveSelectedAttribute = true;
+      }
+    }
+    // END "Stock by Attributes" SBA
+     
+  }
+
 
   /*
    * 'NOTIFY_ATTRIBUTES_MODULE_DEFAULT_SWITCH';
@@ -554,22 +836,76 @@ class products_with_attributes_stock extends base {
               //   and disabled, then try to bump to the next attribute.
               //  if the last attribute is default and disabled, then try to bump to the first/next
               //  if all are disabled, then what is to be addressed? Should it be programatic or
+        $move2next = false;
         while (!$products_opt->EOF) {
-          if ($prevent_checkout && $products_opt->fields['pasqty'] <= 0 && ($products_opt->fields['attributes_display_only'] && $products_opt->fields['attributes_default'])) {
-            $disablebackorder[] = null;
-          } elseif ($prevent_checkout && $products_opt->fields['pasqty'] <= 0 && /*$products_opt->fields['products_options_values_id'] != $selected_attribute &&*/ $products_opt->fields['attributes_display_only'] && !$products_opt->fields['attributes_default']) { // If the first item is set as disabled and there is no default, then this could cause the product to be incorrectly added to the cart.
+          // Early escape if there is no reason to specifically disable the option.
+          if (!$prevent_checkout
+            || $products_opt->fields['pasqty'] > 0
+            || $products_opt->fields['attributes_display_only'] && $products_opt->fields['attributes_default']) {
+
+            $disablebackorder[] = '';
+            // If previous selected default was invalid, then because this option is "selectable", make it the new default.
+            if ($move2next) {
+              $selected_attribute = $products_opt->fields['options_values_id'];
+              $move2next = false;
+            }
+            $products_opt->MoveNext();
+            continue;
+          }
+
+          // Identify if the given option name/option value combination is defined as a specific variant for this specific selection.
+          //   This only really works for single optin name product or if each option name/option value is split out. For combined attributes, this
+          //   does not properly identify the presence/existence of the variant.  That aspect probably needs to be controlled from the front end of
+          //   the store via javascript/jQuery and/or upon selection of the combination without the extra screen modification.
+          $isDefined = !empty($_SESSION['pwas_class2']->zen_get_sba_attribute_info($prod_id, array($products_opt->fields['options_id'] => $products_opt->fields['options_values_id']) /*$products_options_array*/, 'product', 'ids'));
+          // If the item is display only then disable it from selection. display_only with default is handled above.
+          if ($products_opt->fields['attributes_display_only'] && !$products_opt->fields['attributes_default']) {
             $disablebackorder[] = ' disabled="disabled" ';
-          } elseif ($prevent_checkout && $products_opt->fields['pasqty'] <= 0 && $products_opt->fields['attributes_default']) { // If the first item is set as disabled and there is no default, then this could cause the product to be incorrectly added to the cart.
-            $disablebackorder[] = null;
-          } elseif ($prevent_checkout && $products_opt->fields['pasqty'] <= 0) {
+          } elseif ($isDefined && $products_opt->fields['attributes_default']) {
+            // If the option name/option value combination has its own stock_id and it is/was a default, then because there is insufficient stock, disable it.
+            //   Also, because it was set as a default, then this selects/suggests another default be selected so that at least one is chosen.
+            $disablebackorder[] = ' disabled="disabled" '; //' disabled="disabled" ';
+            $move2next = true;
+          } elseif ($isDefined) {
+            // By this point, it is not display only, it is not a default, it is identified as a known variant, it is out of stock and not
+            //   permitted to be added to the cart, so disable it.
             $disablebackorder[] = ' disabled="disabled" ';
-          } else {  
-            $disablebackorder[] = null;
+          } elseif (zen_get_products_stock($prod_id) <= 0) {
+            // Basically the expectation is that this options_id/options value doesn't have a variant defined and the total quantity of product is <=0
+            //   then disable the option as a general rule
+            $disablebackorder[] = ' disabled="disabled" ';
+          } else {
+            // There doesn't appear to be any remaining reason to disable the variant, so allow it to be added and go ahead and suggest this variant as the new default.
+            $disablebackorder[] = '';
+            if ($move2next) {
+              $selected_attribute = $products_opt->fields['options_values_id'];
+              $move2next = false;
+            }
           }
           $products_opt->MoveNext();
         }
         unset($products_opt);
         unset($prevent_checkout);
+        // If have exited the above loop and still need to resolve to the next option value, attempt to find the next available option value.
+        if($move2next) {
+          $sba_counter = 0;
+          foreach ($products_options_array as $prod_key => $prod_val) {
+            // The $disablebackorder array is 0 based and is expected to be one for one to $products_options_array at least in sequence, though not
+            //   necessarily in number.  If the current options are not disabled, then allow it to become the new default.
+            if (empty($disablebackorder[$sba_counter])) {
+              $selected_attribute = $prod_val['id'];
+              $move2next = false;
+              break; // Don't try to process any further items in array.
+            }
+            $sba_counter++;
+          }
+
+          // try to find another solution that is currently available, if none then set to the first one as an "possibility"?
+          if ($move2next) {
+            $selected_attribute = $products_options_array[0]['id'];
+            $move2next = false;
+          }
+        }
         
           //var_dump($products_options_array); //Debug Line
           $options_html_id[] = 'drp-attrib-' . $products_options_names_fields['products_options_id'];
@@ -1070,6 +1406,15 @@ class products_with_attributes_stock extends base {
     }
   }
 
+  // NOTIFY_HEADER_END_CHECKOUT_SUCCESS
+  function updateNotifyHeaderEndCheckoutSuccess(&$callingClass, $notifier, $paramsArray) {
+    global $order, $customid;
+    
+    if (isset($order) && is_object($order)) {
+      $this->updateNotifyHeaderEndCheckoutConfirmation($callingClass, $notifier, $paramsArray);
+    }
+  }
+
   // NOTIFY_HEADER_END_SHOPPING_CART
     /**
      * @param $callingClass
@@ -1349,7 +1694,7 @@ class products_with_attributes_stock extends base {
    */
   function update(&$callingClass, $notifier, $paramsArray) {
   //global $db;
-    if ($notifier == 'NOTIFY_ATTRIBUTES_MODULE_SALE_MAKER_DISPLAY_PRICE_PERCENTAGE') {
+    if ($notifier == 'NOTIFY_ATTRIBUTES_MODULE_SALE_MAKER_DISPLAY_PRICE_PERCENTAGE' || $notifier == 'NOTIFY_ATTRIBUTES_MODULE_SALEMAKER_DISPLAY_PRICE_PERCENTAGE') {
       $this->updateNotifyAttributesModuleSaleMakerDisplayPricePercentage($callingClass, $notifier, $paramsArray);
     }
   
@@ -1488,7 +1833,7 @@ class products_with_attributes_stock extends base {
     /**
      * ZC 1.5.1: $zco_notifier->notify('NOTIFY_HEADER_END_CHECKOUT_CONFIRMATION');
      **/
-    if ($notifier == 'NOTIFY_HEADER_END_CHECKOUT_CONFIRMATION') {
+    if ($notifier == 'NOTIFY_HEADER_END_CHECKOUT_CONFIRMATION' || $notifier == 'NOTIFY_HEADER_END_CHECKOUT_SUCCESS') {
       $this->updateNotifyHeaderEndCheckoutConfirmation($callingClass, $notifier, $paramsArray);
     }
     

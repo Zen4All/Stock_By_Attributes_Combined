@@ -23,6 +23,8 @@ class products_with_attributes_class_stock extends base {
 
   private $_isSBA = array();
   
+  protected $zgapf; // Variable to hold ReflectionFunction information about function zen_get_attributes_price_final
+  
 /**
  * @package includes/functions/extra_functions
  * products_with_attributes.php
@@ -38,6 +40,16 @@ class products_with_attributes_class_stock extends base {
 
   function __construct() {
     $this->_isSBA = array();
+    $this->zgapf = false;
+    if (function_exists('zen_get_attributes_price_final')) {
+      if (class_exists('ReflectionFunction')) {
+        $zgapf = new ReflectionFunction('zen_get_attributes_price_final');
+        if ($zgapf->getNumberOfParameters() > 4) {
+          $this->zgapf = true;
+        }
+        unset ($zgapf);
+      }
+    }
   }
 
 function non_stock_attribute($check_attribute_id/*, $non_stock_id, $non_stock_type, $non_stock_source = '0', $non_stock_language_id = $_SESSION['languages_id']*/) {
@@ -128,7 +140,7 @@ function cartProductCount($products_id){
 //    global $template_dir;
     $tmp_attribID = trim($name, 'id[]');//used to get the select ID reference to be used in jquery
     $field = '';
-    if (defined('SBA_SHOW_IMAGE_ON_PRODUCT_INFO') && SBA_SHOW_IMAGE_ON_PRODUCT_INFO != '0' && (!empty($_GET['products_id']) ? $this->zen_product_is_sba($_GET['products_id']) : false)) 
+    if (defined('SBA_SHOW_IMAGE_ON_PRODUCT_INFO') && SBA_SHOW_IMAGE_ON_PRODUCT_INFO != '0' && !empty($_GET['products_id']) && $this->zen_product_is_sba($_GET['products_id'])) 
     {
       $field = /*'<script ' . *//*src="'.DIR_WS_TEMPLATES . $template_dir . '/jscript/jquery-1.10.2.min.js"*//* '></script> */
         '<script type="text/javascript">
@@ -796,7 +808,7 @@ Of the attributes provided, determine the number of those attributes that are
     if ($products_options_names->RecordCount() == 0) {
       // @TODO: Log error rather than set session value, unless session value is to be used elsewhere for messaging.
       // $_SESSION['sba_extra_functions_error'] = 'SBA product can not have any attributes';
-      trigger_error('SBA product can not have any attributes', E_USER_WARNING);
+      trigger_error('SBA product must have at least one attribute, this product does not have any. Attributes expected were:: ' . print_r($attribute_list, true) . ' : ' . /*print_r($products_options_names, true) .*/ ' from: ' . $from, E_USER_WARNING);
       //There's an issue because this shouldn't be possible
     } else {
       //if (isset($_SESSION['sba_extra_functions_error'])) {

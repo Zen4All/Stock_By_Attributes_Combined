@@ -102,7 +102,11 @@ $this->products_original_price = $tax_class_array->fields['products_price']; /* 
 
       if (function_exists('zen_get_attributes_price_final')) {
         if (class_exists('ReflectionFunction')) {
-          $this->zgapf = new ReflectionFunction('zen_get_attributes_price_final');
+          $zgapf = new ReflectionFunction('zen_get_attributes_price_final');
+          if ($zgapf->getNumberOfParameters() > 4) {
+            $this->zgapf = true;
+          }
+          unset ($zgapf);
         }
       }
 
@@ -327,7 +331,7 @@ $this->products_original_price = $tax_class_array->fields['products_price']; /* 
         $options_order_by= ' order by popt.products_options_name';
       }
 //      $products_options_name_query = "select distinct popt.products_options_id, popt.products_options_name, popt.products_options_track_stock, popt.products_options_images_style, popt.products_options_type from " . TABLE_PRODUCTS_OPTIONS . " popt, " . TABLE_PRODUCTS_ATTRIBUTES . " patrib where patrib.products_id = :products_id: and popt.products_options_id = patrib.options_id and popt.language_id = :languages_id: :stocked_where: order by popt.products_options_sort_order";
-      $products_options_name_query = "select distinct popt.products_options_id, popt.products_options_name, popt.products_options_track_stock, popt.products_options_images_style, popt.products_options_type from " . TABLE_PRODUCTS_OPTIONS . " popt, " . TABLE_PRODUCTS_ATTRIBUTES . " patrib where patrib.products_id = :products_id: and popt.products_options_id = patrib.options_id and popt.language_id = :languages_id: :stocked_where:" . $options_order_by;
+      $products_options_name_query = "select distinct popt.products_options_id, popt.products_options_name, popt.products_options_track_stock, popt.products_options_images_style, popt.products_options_type, popt.products_options_sort_order from " . TABLE_PRODUCTS_OPTIONS . " popt, " . TABLE_PRODUCTS_ATTRIBUTES . " patrib where patrib.products_id = :products_id: and popt.products_options_id = patrib.options_id and popt.language_id = :languages_id: :stocked_where:" . $options_order_by;
 
       $products_options_name_query = $db->bindVars($products_options_name_query, ':products_id:', $this->products_id, 'integer');
       $products_options_name_query = $db->bindVars($products_options_name_query, ':languages_id:', $_SESSION['languages_id'], 'integer');
@@ -346,7 +350,7 @@ $this->products_original_price = $tax_class_array->fields['products_price']; /* 
       while (!$products_options_name->EOF) {
         $products_options_array = array();
 //        $products_options_query = "select pov.products_options_values_id, pov.products_options_values_name, pa.options_values_price, pa.price_prefix from " . TABLE_PRODUCTS_ATTRIBUTES . " pa, " . TABLE_PRODUCTS_OPTIONS_VALUES . " pov where pa.products_id = :products_id: and pa.options_id = :products_options_id: and pa.options_values_id = pov.products_options_values_id and pov.language_id = :languages_id: order by pa.products_options_sort_order";
-        $products_options_query = "select pov.products_options_values_id, pov.products_options_values_name, pa.options_values_price, pa.price_prefix from " . TABLE_PRODUCTS_ATTRIBUTES . " pa, " . TABLE_PRODUCTS_OPTIONS_VALUES . " pov where pa.products_id = :products_id: and pa.options_id = :products_options_id: and pa.options_values_id = pov.products_options_values_id and pov.language_id = :languages_id: :order_by:";
+        $products_options_query = "select pov.products_options_values_id, pov.products_options_values_name, pa.options_values_price, pa.price_prefix, pa.products_options_sort_order from " . TABLE_PRODUCTS_ATTRIBUTES . " pa, " . TABLE_PRODUCTS_OPTIONS_VALUES . " pov where pa.products_id = :products_id: and pa.options_id = :products_options_id: and pa.options_values_id = pov.products_options_values_id and pov.language_id = :languages_id: :order_by:";
 
         $products_options_query = $db->bindVars($products_options_query, ':products_id:', $this->products_id, 'integer');
         $products_options_query = $db->bindVars($products_options_query, ':languages_id:', $_SESSION['languages_id'], 'integer');
@@ -374,7 +378,7 @@ $this->products_original_price = $tax_class_array->fields['products_price']; /* 
           }
 
           /// Start of Changes- display actual prices instead of +/- Actual Price Pull Down v1.2.3a
-          $new_price ? $original_price = $new_price : $original_price = $this->products_original_price; //// check if set special price note $this variable
+          isset($new_price) ? $original_price = $new_price : $original_price = $this->products_original_price; //// check if set special price note $this variable
 
           $option_price = $products_options->fields['options_values_price'];
           if ($products_options->fields['price_prefix'] == "-") // in case price lowers, don't add values, subtract.
